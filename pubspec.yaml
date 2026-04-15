@@ -1,0 +1,61 @@
+name: tokilo
+description: "Tokilo Business Hub - All-in-one business operating ecosystem"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  image_picker: ^1.1.2
+
+  # Icons
+  cupertino_icons: ^1.0.8
+
+  # Supabase (Auth + Database)
+  supabase_flutter: ^2.3.0
+
+  # Navigation
+  go_router: ^13.2.0
+
+  # Fonts
+  google_fonts: ^6.2.1
+
+  # Local Storage
+  shared_preferences: ^2.2.3
+
+  # SVG support
+  flutter_svg: ^2.0.10
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+  # ✅ App Icon Generator
+  flutter_launcher_icons: ^0.14.3
+
+# ✅ App Icon Configuration — uses your tokilologo.png
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icons/tokilologo.png"
+  min_sdk_android: 21
+
+  # Android adaptive icon (clean white background with your logo)
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/icons/tokilologo.png"
+
+  # iOS — removes transparency for App Store compliance
+  remove_alpha_ios: true
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/images/
+    - assets/icons/
