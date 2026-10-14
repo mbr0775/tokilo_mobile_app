@@ -23,11 +23,20 @@ import '../features/portfolio/screens/portfolio_screen.dart';
 import '../admin/navigation/admin_router.dart';
 import 'bottom_nav_shell.dart';
 import 'auth_router_refresh.dart';
+import '../core/services/auth_callback_service.dart';
 
 class AppRouter {
-  static void completePasswordRecovery() {
-    _authRefresh.completeRecovery();
-    router.go(isAdminUser() ? '/admin/dashboard' : '/feed');
+  static Future<void> Function()? clearStoredCompletionSession;
+  static bool get isReturningToLogin => _authRefresh.returningToLogin;
+
+  static Future<void> completePasswordRecovery() => returnToLogin();
+
+  static Future<void> returnToLogin() async {
+    _authRefresh.beginReturnToLogin();
+    await clearCompletionSession(Supabase.instance.client.auth);
+    await clearStoredCompletionSession?.call();
+    _authRefresh.completeReturnToLogin();
+    router.go('/login');
   }
 
   static final GlobalKey<NavigatorState> _rootNavigatorKey =
@@ -45,6 +54,9 @@ class AppRouter {
     redirect: (context, state) {
       final session = Supabase.instance.client.auth.currentSession;
       final loc = state.matchedLocation;
+      if (_authRefresh.returningToLogin) {
+        return loc == '/login' ? null : '/login';
+      }
       if (session != null && _authRefresh.passwordRecoveryActive) {
         return loc == '/reset-password' ? null : '/reset-password';
       }

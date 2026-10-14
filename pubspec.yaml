@@ -2,12 +2,13 @@ name: tokilo
 description: "Tokilo Business Hub - All-in-one business operating ecosystem"
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.0.0+2
 
 environment:
   sdk: ^3.11.0
 
 dependencies:
+  app_links: 6.4.1
   flutter:
     sdk: flutter
 

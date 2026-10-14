@@ -122,7 +122,9 @@ void main() {
     failUpdate = true;
     bool completed = false;
     await tester.pumpWidget(
-      MaterialApp(home: ResetPasswordScreen(onUpdated: () => completed = true)),
+      MaterialApp(
+        home: ResetPasswordScreen(onUpdated: () async => completed = true),
+      ),
     );
     await tester.enterText(
       find.byType(TextFormField).at(0),
@@ -143,7 +145,10 @@ void main() {
     await tester.tap(find.text('Update password'));
     await tester.pumpAndSettle();
     expect(completed, isTrue);
-    expect(find.text('Your password has been updated.'), findsOneWidget);
+    expect(
+      find.textContaining('Your password has been updated.'),
+      findsOneWidget,
+    );
     expect(requests.where((r) => r.method == 'PUT'), hasLength(2));
     expect(tester.takeException(), isNull);
   });

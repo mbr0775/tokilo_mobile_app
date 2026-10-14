@@ -6,8 +6,8 @@ Prepared 14 October 2026. This document records verified work and remaining rele
 
 - Package: `com.tokilotechnologies.businesshub`; display name: Tokilo Business Hub.
 - Flutter 3.41.6 / Dart 3.11.4; Android target and compile SDK 36.
-- AAB: `build/app/outputs/bundle/release/app-release.aab`, version 1.0.0, base version code 1.
-- Device APK: `build/app/outputs/flutter-apk/app-arm64-v8a-release.apk`; split APK version code 2001 is Flutter's ABI offset.
+- Play currently has AAB version 1.0.0, base version code 1, active in internal testing. The replacement candidate is 1.0.0+2. The owner confirmed email verification returns to Login and password reset returns to Login with the new password working on the installed version 2.
+- Device APK: `build/app/outputs/flutter-apk/app-arm64-v8a-release.apk`; version 2 split APK version code 2002 is Flutter's ABI offset.
 - Upload certificate: `docs/release/upload-certificate.pem`. The upload private key and passwords are outside Git, under the owner's private Codex directory. Back them up securely before uploading.
 - `android/key.properties` is local and ignored. Release builds fail when private signing configuration is missing, instead of silently using a debug certificate.
 
@@ -15,7 +15,7 @@ Build with `flutter build appbundle --release`. Increase `pubspec.yaml` build nu
 
 ## Verified checks
 
-- All 51 Flutter tests passed. Four password-recovery tests were repeated after final wording changes. Ten isolated Edge Function tests passed.
+- All 63 Flutter tests passed for version 2, including signup consent, narrow-screen/keyboard layout, parallax/reduced motion and completion routing. Ten isolated Edge Function tests passed for the unchanged backend.
 - Flutter analysis passed with no errors or warnings; 282 existing informational style/deprecation findings remain.
 - Signed release AAB and split APK built. Native ELF load alignment and APK ZIP alignment passed 16 KB checks. A physical 16 KB device has not been tested.
 - Updated release installed on the owner-confirmed NIC-LX2. Google OAuth returned to the app; Home, Feed, Profile, account legal links and Notifications were inspected. Session persisted across a force-stop/cold restart and an APK update.
@@ -36,9 +36,9 @@ Build with `flutter build appbundle --release`. Increase `pubspec.yaml` build nu
 
 ## Testing tracks and remaining gates
 
-The inspected Play account is Personal, Tokilo Technologies. After owner approval of the required declarations, Tokilo Business Hub was created as draft app `4976391028586565194`. Its signed AAB version 1 (1.0.0), target SDK 36, was uploaded and processed for internal testing. The dashboard explicitly requires 12 testers opted in continuously for 14 days; production is locked. Internal rollout and closed-test setup status should be recorded below after confirmation.
+The inspected Play account is Personal, Tokilo Technologies. After owner approval of the required declarations, Tokilo Business Hub was created as draft app `4976391028586565194`. Its signed AAB version 1 (1.0.0), target SDK 36, was uploaded and processed for internal testing. The dashboard explicitly requires 12 testers opted in continuously for 14 days; production is locked. The internal release is active and available to testers. The existing 12-person list “Apzo Life Closed Testers for Lankar 2” is selected and saved for Tokilo. Closed testing has not been configured or started; internal days do not count toward its requirement.
 
-1. App entry and initial AAB upload are complete. Finish internal rollout with the owner-authorized existing tester lists.
+1. Initial internal rollout and owner-completed version 2 email/reset checks are complete. Upload the replacement signed bundle to internal testing. Reuse the existing tester list for closed testing.
 2. Review Play App Signing's distribution certificate and the automated pre-launch report.
 3. Provide a dedicated non-admin review account and private access instructions. Do not give a reviewer the owner's administrator account or publish passwords in source.
 4. Reset/password-login and disposable-account backend deletion tests passed. Finish cross-device chat/image/push testing and a dedicated customer's native deletion UI flow. Never delete a real business account to prove a test.
@@ -63,3 +63,9 @@ Business audience; free download; no advertising SDK. Confirm actual service ava
 - Data safety: https://support.google.com/googleplay/android-developer/answer/10787469
 - Firebase SDK disclosure: https://firebase.google.com/docs/android/play-data-disclosure
 - Native page sizes: https://developer.android.com/guide/practices/page-sizes
+
+## Signup version 2 interface
+
+Signup uses a light responsive layout, a native 3D illustration and scroll-linked parallax. Motion sleeps offscreen and respects disabled animations/accessibility navigation. Consent has a 48-pixel checkbox target, a vertically aligned tappable label and separate accessible policy links. Both Google and email signup require consent. Back and Login actions work even when Signup was opened directly. Form content remains static and usable without animation. Narrow-screen, enlarged-text, keyboard, consent/link independence and repeated parallax tests are included.
+
+The version 2 signed arm64 split APK (code 2002) was installed over code 2001 successfully. Native signup header/consent, scrolling and keyboard rendering were inspected; signing and 16 KB ZIP alignment passed. The previous encrypted session survived the update. The owner confirmed version 2 email confirmation finishes at Login, and reset finishes at Login with subsequent new-password login working. Version 2 Play upload status is recorded separately; do not infer production release from an internal upload. The earlier owner-completed version 1 reset returned to Feed; that does not validate the newly requested Login behavior.

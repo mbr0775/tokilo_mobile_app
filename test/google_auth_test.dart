@@ -118,7 +118,15 @@ void main() {
         launches++;
         return true;
       });
-      await tester.pumpWidget(const MaterialApp(home: SignupScreen()));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: const SignupScreen(),
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context).copyWith(disableAnimations: true),
+            child: child!,
+          ),
+        ),
+      );
       await tester.ensureVisible(find.byType(GoogleSignInButton));
       await tester.tap(find.text('Continue with Google'));
       await tester.pumpAndSettle();
@@ -138,6 +146,41 @@ void main() {
       await tester.pumpAndSettle();
       expect(launches, 1);
       expect(Supabase.instance.client.auth.currentSession, isNull);
+    },
+  );
+
+  testWidgets(
+    'signup fits a narrow screen with large text and the keyboard visible',
+    (tester) async {
+      tester.view.physicalSize = const Size(320, 740);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: const SignupScreen(),
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context).copyWith(
+              disableAnimations: true,
+              textScaler: const TextScaler.linear(1.5),
+              viewInsets: const EdgeInsets.only(bottom: 280),
+            ),
+            child: child!,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.ensureVisible(find.byType(Checkbox));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.ensureVisible(find.byType(TextFormField).last);
+      await tester.enterText(
+        find.byType(TextFormField).last,
+        'Fixture-password',
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
     },
   );
 

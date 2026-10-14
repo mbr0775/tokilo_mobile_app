@@ -5,7 +5,7 @@ import '../../../navigation/app_router.dart';
 
 class ResetPasswordScreen extends StatefulWidget {
   const ResetPasswordScreen({super.key, this.onUpdated});
-  final VoidCallback? onUpdated;
+  final Future<void> Function()? onUpdated;
   @override
   State<ResetPasswordScreen> createState() => _ResetPasswordScreenState();
 }
@@ -35,10 +35,14 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
       _password.clear();
       _confirm.clear();
       final messenger = ScaffoldMessenger.of(context);
-      (widget.onUpdated ?? AppRouter.completePasswordRecovery)();
+      await (widget.onUpdated ?? AppRouter.completePasswordRecovery)();
       messenger.clearSnackBars();
       messenger.showSnackBar(
-        const SnackBar(content: Text('Your password has been updated.')),
+        const SnackBar(
+          content: Text(
+            'Your password has been updated. Sign in with your new password.',
+          ),
+        ),
       );
     } catch (_) {
       if (mounted)

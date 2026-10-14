@@ -22,6 +22,18 @@ class AuthRouterRefresh extends ChangeNotifier {
 
   late final StreamSubscription<AuthState> _subscription;
   bool passwordRecoveryActive = false;
+  bool returningToLogin = false;
+  void beginReturnToLogin() {
+    returningToLogin = true;
+    notifyListeners();
+  }
+
+  void completeReturnToLogin() {
+    passwordRecoveryActive = false;
+    returningToLogin = false;
+    notifyListeners();
+  }
+
   void completeRecovery() {
     passwordRecoveryActive = false;
     notifyListeners();

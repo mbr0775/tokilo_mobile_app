@@ -14,6 +14,7 @@ import 'core/services/push_notification_service.dart';
 import 'core/services/user_presence_service.dart';
 import 'core/theme/app_theme.dart';
 import 'core/services/secure_auth_storage.dart';
+import 'core/services/auth_callback_service.dart';
 import 'navigation/app_router.dart';
 
 @pragma('vm:entry-point')
@@ -40,17 +41,22 @@ Future<void> main() async {
     ),
   );
 
+  final authStorage = SecureAuthStorage(
+    namespace: 'tokilo.nsosypdtxdoeiszilpwj',
+  );
   await Supabase.initialize(
     url: SupabaseConstants.supabaseUrl,
     anonKey: SupabaseConstants.supabaseAnonKey,
     authOptions: FlutterAuthClientOptions(
       authFlowType: AuthFlowType.pkce,
-      localStorage: SecureAuthStorage(namespace: 'tokilo.nsosypdtxdoeiszilpwj'),
+      detectSessionInUri: false,
+      localStorage: authStorage,
       pkceAsyncStorage: SecurePkceStorage(
         namespace: 'tokilo.nsosypdtxdoeiszilpwj',
       ),
     ),
   );
+  AppRouter.clearStoredCompletionSession = authStorage.removePersistedSession;
 
   runApp(const TokiloApp());
 
@@ -73,11 +79,17 @@ class _TokiloAppState extends State<TokiloApp> with WidgetsBindingObserver {
   final _authMessenger = GlobalKey<ScaffoldMessengerState>();
   StreamSubscription<AuthState>? _authSub;
   Future<void>? _notificationSetup;
+  late final AuthCallbackService _authCallbacks;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _authCallbacks = AuthCallbackService(
+      auth: Supabase.instance.client.auth,
+      onEmailConfirmation: AppRouter.returnToLogin,
+      onError: _showCallbackError,
+    )..start();
 
     // Permission prompts, FCM and presence must never hold the native splash.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -86,32 +98,31 @@ class _TokiloAppState extends State<TokiloApp> with WidgetsBindingObserver {
       unawaited(UserPresenceService.instance.start());
     });
 
-    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen(
-      (data) {
-        final session = data.session;
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((data) {
+      final session = data.session;
 
-        if (session != null) {
-          unawaited(UserPresenceService.instance.start());
-          unawaited(_registerPushToken());
-          if (Firebase.apps.isNotEmpty)
-            PushNotificationService.instance.openPendingConversation();
-        } else {
-          unawaited(UserPresenceService.instance.stop());
-        }
-      },
-      onError: (Object _) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          _authMessenger.currentState?.showSnackBar(
-            const SnackBar(
-              content: Text(
-                'This sign-in or reset link could not be used. Sign in again or request a new reset link.',
-              ),
-            ),
-          );
-        });
-      },
-    );
+      if (session != null && !AppRouter.isReturningToLogin) {
+        unawaited(UserPresenceService.instance.start());
+        unawaited(_registerPushToken());
+        if (Firebase.apps.isNotEmpty)
+          PushNotificationService.instance.openPendingConversation();
+      } else {
+        unawaited(UserPresenceService.instance.stop());
+      }
+    }, onError: _showCallbackError);
+  }
+
+  void _showCallbackError(Object _) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _authMessenger.currentState?.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This confirmation, sign-in or reset link could not be used. Sign in again or request a new link.',
+          ),
+        ),
+      );
+    });
   }
 
   Future<void> _initializeNotifications() async {
@@ -135,7 +146,7 @@ class _TokiloAppState extends State<TokiloApp> with WidgetsBindingObserver {
   Future<void> _registerPushToken() async {
     // Auth can emit its initial session before the first frame/Firebase setup.
     final setup = _notificationSetup;
-    if (setup == null) return;
+    if (setup == null || AppRouter.isReturningToLogin) return;
     await setup;
     if (!mounted || Firebase.apps.isEmpty) return;
     await PushNotificationService.instance.registerToken();
@@ -145,6 +156,7 @@ class _TokiloAppState extends State<TokiloApp> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _authSub?.cancel();
+    unawaited(_authCallbacks.dispose());
     if (Firebase.apps.isNotEmpty)
       unawaited(PushNotificationService.instance.dispose());
     unawaited(UserPresenceService.instance.stop());

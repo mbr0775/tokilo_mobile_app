@@ -33,7 +33,9 @@ class _ViewportMotionState extends State<ViewportMotion>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _reduced = MediaQuery.disableAnimationsOf(context);
+    _reduced =
+        MediaQuery.disableAnimationsOf(context) ||
+        MediaQuery.of(context).accessibleNavigation;
     final position = Scrollable.maybeOf(context)?.position;
     if (position != _position) {
       _position?.removeListener(_scheduleVisibilityCheck);
