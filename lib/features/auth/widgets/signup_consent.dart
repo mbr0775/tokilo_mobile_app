@@ -35,12 +35,10 @@ class SignupConsent extends StatelessWidget {
               height: 48,
               child: Checkbox(
                 value: accepted,
-                semanticLabel: 'Accept Terms & Conditions and Privacy Policy',
+                semanticLabel: 'Accept Privacy Policy and Terms & Conditions',
                 activeColor: AppColors.primary,
                 materialTapTargetSize: MaterialTapTargetSize.padded,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(5),
-                ),
+                shape: const CircleBorder(),
                 onChanged: onChanged == null
                     ? null
                     : (value) => onChanged!(value ?? false),
@@ -55,7 +53,7 @@ class SignupConsent extends StatelessWidget {
                   child: const Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      'I agree to the Terms & Conditions and Privacy Policy.',
+                      'I accept the Privacy Policy and Terms & Conditions.',
                       style: TextStyle(
                         fontSize: 13,
                         height: 1.5,
@@ -78,9 +76,9 @@ class SignupConsent extends StatelessWidget {
                   padding: EdgeInsets.zero,
                   minimumSize: const Size(48, 48),
                 ),
-                onPressed: onOpenTerms,
+                onPressed: onOpenPrivacy,
                 child: const Text(
-                  'Terms & Conditions',
+                  'Privacy Policy',
                   style: TextStyle(fontSize: 12),
                 ),
               ),
@@ -89,9 +87,9 @@ class SignupConsent extends StatelessWidget {
                   padding: EdgeInsets.zero,
                   minimumSize: const Size(48, 48),
                 ),
-                onPressed: onOpenPrivacy,
+                onPressed: onOpenTerms,
                 child: const Text(
-                  'Privacy Policy',
+                  'Terms & Conditions',
                   style: TextStyle(fontSize: 12),
                 ),
               ),

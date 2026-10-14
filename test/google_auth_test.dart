@@ -132,7 +132,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(launches, 0);
       expect(
-        find.text('Please accept the Terms & Conditions to continue.'),
+        find.text(
+          'Please accept the Privacy Policy and Terms & Conditions to continue.',
+        ),
         findsOneWidget,
       );
       await tester.ensureVisible(find.byType(Checkbox));

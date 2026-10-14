@@ -41,7 +41,7 @@ void main() {
       expect(tester.takeException(), isNull);
       final checkboxRect = tester.getRect(find.byType(Checkbox));
       final labelRect = tester.getRect(
-        find.text('I agree to the Terms & Conditions and Privacy Policy.'),
+        find.text('I accept the Privacy Policy and Terms & Conditions.'),
       );
       expect(checkboxRect.height, greaterThanOrEqualTo(48));
       expect((checkboxRect.center.dy - labelRect.center.dy).abs(), lessThan(1));
@@ -54,7 +54,7 @@ void main() {
       await tester.pump();
       expect(accepted, isTrue);
       await tester.tap(
-        find.text('I agree to the Terms & Conditions and Privacy Policy.'),
+        find.text('I accept the Privacy Policy and Terms & Conditions.'),
       );
       await tester.pump();
       expect(accepted, isFalse);

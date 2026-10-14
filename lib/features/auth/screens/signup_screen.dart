@@ -61,7 +61,9 @@ class _SignupScreenState extends State<SignupScreen> {
     if (_isLoading) return;
     if (!_formKey.currentState!.validate()) return;
     if (!_acceptTerms) {
-      _showError('Please accept the Terms & Conditions to continue.');
+      _showError(
+        'Please accept the Privacy Policy and Terms & Conditions to continue.',
+      );
       return;
     }
 
@@ -178,7 +180,7 @@ class _SignupScreenState extends State<SignupScreen> {
                       canContinue: () {
                         if (_acceptTerms) return true;
                         _showError(
-                          'Please accept the Terms & Conditions to continue.',
+                          'Please accept the Privacy Policy and Terms & Conditions to continue.',
                         );
                         return false;
                       },
