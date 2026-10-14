@@ -22,19 +22,28 @@ dependencies:
   # Navigation
   go_router: ^13.2.0
 
+  # State Management
+  url_launcher: ^6.3.1
+
   # Fonts
   google_fonts: ^6.2.1
 
   # Local Storage
-  shared_preferences: ^2.2.3
+  shared_preferences: ^2.5.5
+  flutter_secure_storage: 11.2.0
 
   # SVG support
   flutter_svg: ^2.0.10
+  firebase_core: ^4.8.0
+  firebase_messaging: ^16.2.1
+  flutter_local_notifications: ^21.0.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  http: ^1.6.0
+  web_socket_channel: ^3.0.3
 
   # ✅ App Icon Generator
   flutter_launcher_icons: ^0.14.3
@@ -57,5 +66,14 @@ flutter:
   uses-material-design: true
 
   assets:
-    - assets/images/
     - assets/icons/
+    - assets/images/tokilo-studio.webp
+  fonts:
+    - family: TokiloSans
+      fonts:
+        - asset: assets/fonts/roboto-regular.ttf
+          weight: 400
+        - asset: assets/fonts/roboto-medium.ttf
+          weight: 500
+        - asset: assets/fonts/roboto-bold.ttf
+          weight: 700

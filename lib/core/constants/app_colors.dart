@@ -8,14 +8,14 @@ class AppColors {
   static const Color accent = Color(0xFF00C9B1);
 
   // Background Colors
-  static const Color background = Color(0xFFF5F7FA);
+  static const Color background = Color(0xFFF4F8F8);
   static const Color surface = Color(0xFFFFFFFF);
   static const Color cardBg = Color(0xFFFFFFFF);
 
   // Text Colors
-  static const Color textPrimary = Color(0xFF1A1D23);
-  static const Color textSecondary = Color(0xFF6B7280);
-  static const Color textHint = Color(0xFF9CA3AF);
+  static const Color textPrimary = Color(0xFF142D35);
+  static const Color textSecondary = Color(0xFF586E75);
+  static const Color textHint = Color(0xFF6D8187);
   static const Color textWhite = Color(0xFFFFFFFF);
 
   // Status Colors
@@ -25,7 +25,7 @@ class AppColors {
   static const Color info = Color(0xFF3B82F6);
 
   // Border & Divider
-  static const Color border = Color(0xFFE5E7EB);
+  static const Color border = Color(0xFFDFE9E9);
   static const Color divider = Color(0xFFF3F4F6);
 
   // Gradients

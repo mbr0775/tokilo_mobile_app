@@ -1,6 +1,11 @@
+// lib/features/auth/screens/splash_screen.dart
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+import '../../../admin/navigation/admin_router.dart';
 import '../../../core/constants/app_colors.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -20,6 +25,7 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   void initState() {
     super.initState();
+
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1800),
@@ -39,26 +45,43 @@ class _SplashScreenState extends State<SplashScreen>
       ),
     );
 
-    _slideAnim =
-        Tween<Offset>(begin: const Offset(0, 0.4), end: Offset.zero).animate(
-      CurvedAnimation(
-        parent: _controller,
-        curve: const Interval(0.3, 1, curve: Curves.easeOut),
-      ),
-    );
+    _slideAnim = Tween<Offset>(begin: const Offset(0, 0.4), end: Offset.zero)
+        .animate(
+          CurvedAnimation(
+            parent: _controller,
+            curve: const Interval(0.3, 1, curve: Curves.easeOut),
+          ),
+        );
 
     _controller.forward();
-    _navigate();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _navigate());
   }
 
   Future<void> _navigate() async {
-    await Future.delayed(const Duration(milliseconds: 3000));
     if (!mounted) return;
+
     final session = Supabase.instance.client.auth.currentSession;
+
+    // User already logged in
     if (session != null) {
-      context.go('/home');
-    } else {
+      if (isAdminUser()) {
+        context.go('/admin/dashboard');
+      } else {
+        context.go('/home');
+      }
+      return;
+    }
+
+    // User not logged in
+    final prefs = await SharedPreferences.getInstance();
+    final seenOnboarding = prefs.getBool('seen_onboarding') ?? false;
+
+    if (!mounted) return;
+
+    if (seenOnboarding) {
       context.go('/login');
+    } else {
+      context.go('/onboarding');
     }
   }
 
@@ -74,12 +97,10 @@ class _SplashScreenState extends State<SplashScreen>
       body: Container(
         width: double.infinity,
         height: double.infinity,
-        decoration: const BoxDecoration(
-          gradient: AppColors.splashGradient,
-        ),
+        decoration: const BoxDecoration(gradient: AppColors.splashGradient),
         child: Stack(
           children: [
-            // ── Decorative background circles ──────────────────────────
+            // Background circle top-right
             Positioned(
               top: -100,
               right: -100,
@@ -92,148 +113,121 @@ class _SplashScreenState extends State<SplashScreen>
                 ),
               ),
             ),
+
+            // Background circle bottom-left
             Positioned(
               bottom: -120,
-              left: -80,
+              left: -120,
               child: Container(
-                width: 350,
-                height: 350,
+                width: 320,
+                height: 320,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: Colors.white.withOpacity(0.05),
-                ),
-              ),
-            ),
-            Positioned(
-              top: 200,
-              left: -50,
-              child: Container(
-                width: 180,
-                height: 180,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: AppColors.accent.withOpacity(0.12),
+                  color: Colors.white.withOpacity(0.06),
                 ),
               ),
             ),
 
-            // ── Main content ───────────────────────────────────────────
+            // Small accent circle
+            Positioned(
+              top: 120,
+              left: 40,
+              child: Container(
+                width: 70,
+                height: 70,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: AppColors.accent.withOpacity(0.18),
+                ),
+              ),
+            ),
+
             Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  // ✅ Tokilo Logo
-                  FadeTransition(
-                    opacity: _fadeAnim,
-                    child: ScaleTransition(
-                      scale: _scaleAnim,
-                      child: Container(
-                        width: 130,
-                        height: 130,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(32),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.25),
-                              blurRadius: 40,
-                              offset: const Offset(0, 16),
-                            ),
-                          ],
-                        ),
-                        padding: const EdgeInsets.all(18),
-                        child: Image.asset(
-                          'assets/icons/tokilologo.png',
-                          fit: BoxFit.contain,
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 36),
-
-                  // ✅ App Name + Tag
-                  SlideTransition(
-                    position: _slideAnim,
-                    child: FadeTransition(
-                      opacity: _fadeAnim,
-                      child: Column(
-                        children: [
-                          const Text(
-                            'TOKILO',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 38,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 10,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 18, vertical: 7),
-                            decoration: BoxDecoration(
-                              color: AppColors.accent.withOpacity(0.2),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(
-                                  color: AppColors.accent.withOpacity(0.5)),
-                            ),
-                            child: const Text(
-                              'Business Hub',
-                              style: TextStyle(
-                                color: AppColors.accent,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 4,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 14),
-                          Text(
-                            'Your Complete Business Ecosystem',
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(0.65),
-                              fontSize: 13,
-                              letterSpacing: 0.5,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-            // ── Bottom loading + powered by ────────────────────────────
-            Positioned(
-              bottom: 52,
-              left: 0,
-              right: 0,
               child: FadeTransition(
                 opacity: _fadeAnim,
-                child: Column(
-                  children: [
-                    SizedBox(
-                      width: 48,
-                      height: 4,
-                      child: LinearProgressIndicator(
-                        backgroundColor: Colors.white.withOpacity(0.2),
-                        valueColor:
-                            const AlwaysStoppedAnimation<Color>(AppColors.accent),
-                        borderRadius: BorderRadius.circular(10),
+                child: SlideTransition(
+                  position: _slideAnim,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      ScaleTransition(
+                        scale: _scaleAnim,
+                        child: Container(
+                          width: 118,
+                          height: 118,
+                          padding: const EdgeInsets.all(18),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(32),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.18),
+                                blurRadius: 28,
+                                offset: const Offset(0, 12),
+                              ),
+                            ],
+                          ),
+                          child: Image.asset(
+                            'assets/icons/tokilologo.png',
+                            fit: BoxFit.contain,
+                          ),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Powered by Tokilo Technologies',
-                      style: TextStyle(
-                        color: Colors.white.withOpacity(0.45),
-                        fontSize: 11,
-                        letterSpacing: 1.2,
+
+                      const SizedBox(height: 28),
+
+                      const Text(
+                        'Tokilo Business Hub',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.3,
+                        ),
                       ),
-                    ),
-                  ],
+
+                      const SizedBox(height: 8),
+
+                      Text(
+                        'Your Complete Business Ecosystem',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.82),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+
+                      const SizedBox(height: 42),
+
+                      SizedBox(
+                        width: 34,
+                        height: 34,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 3,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Colors.white.withOpacity(0.95),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+            Positioned(
+              bottom: 34,
+              left: 0,
+              right: 0,
+              child: Text(
+                'Powered by Tokilo Technologies',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.72),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
             ),

@@ -1,16 +1,21 @@
 // lib/features/chat/screens/chat_screen.dart
 
 import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../../../core/constants/app_colors.dart';
+
 import '../../../admin/constants/admin_constants.dart';
+import '../../../core/constants/app_colors.dart';
 import '../models/chat_models.dart';
+import '../chat_repository.dart';
 
 class ChatScreen extends StatefulWidget {
-  final String?  conversationId;
-  final String?  clientName;
-  final String?  clientEmail;
+  final String? conversationId;
+  final String? clientName;
+  final String? clientEmail;
 
   const ChatScreen({
     super.key,
@@ -24,50 +29,84 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
-  final _supabase   = Supabase.instance.client;
-  final _msgCtrl    = TextEditingController();
-  final _scrollCtrl = ScrollController();
+  final SupabaseClient _supabase = Supabase.instance.client;
+  final TextEditingController _msgCtrl = TextEditingController();
+  final ScrollController _scrollCtrl = ScrollController();
+  final ImagePicker _imagePicker = ImagePicker();
 
-  List<MessageModel> _messages     = [];
-  String?            _conversationId;
-  bool               _isLoading    = true;
-  bool               _isSending    = false;
-  String?            _errorMessage;
+  late final ChatRepository _repository = ChatRepository(_supabase);
+  PendingTextMessage? _pendingText;
+  XFile? _pendingImage;
+  String? _pendingImageId;
+  int _messageLimit = 80;
+  bool _hasEarlier = false;
+  bool _loadingEarlier = false;
+  String? _lastReadId;
 
-  bool               _isOnline     = false;
-  DateTime?          _otherLastSeen;
+  bool get _viewingLatest =>
+      mounted &&
+      WidgetsBinding.instance.lifecycleState != AppLifecycleState.paused &&
+      WidgetsBinding.instance.lifecycleState != AppLifecycleState.inactive &&
+      (ModalRoute.of(context)?.isCurrent ?? true) &&
+      _scrollCtrl.hasClients &&
+      _scrollCtrl.position.extentAfter < 48;
 
-  Timer?             _uiRefreshTimer;
-  Timer?             _heartbeatTimer;
-  Timer?             _offlineTimer;
+  List<MessageModel> _messages = [];
+  String? _conversationId;
 
-  RealtimeChannel?   _channel;
-  RealtimeChannel?   _presenceChannel;
+  bool _isLoading = true;
+  bool _isSending = false;
+  bool _isRefreshing = false;
+  bool _isUploadingAttachment = false;
+
+  String? _errorMessage;
+
+  bool _otherOnline = false;
+  DateTime? _otherLastSeen;
+
+  RealtimeChannel? _messageChannel;
+  RealtimeChannel? _conversationChannel;
+  RealtimeChannel? _statusChannel;
+
+  Timer? _uiRefreshTimer;
+  Timer? _reloadDebounceTimer;
 
   bool get _isAdmin {
     final email = _supabase.auth.currentUser?.email ?? '';
     return email.toLowerCase() == AdminConstants.adminEmail.toLowerCase();
   }
 
-  String get _senderName {
-    final meta = _supabase.auth.currentUser?.userMetadata;
-    return meta?['full_name'] ??
-        _supabase.auth.currentUser?.email ??
-        'User';
+  bool get _isBusy => _isSending || _isUploadingAttachment;
+
+  String get _appBarTitle {
+    if (_isAdmin) {
+      return widget.clientName ?? widget.clientEmail ?? 'Client Chat';
+    }
+    return 'Tokilo Support';
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Lifecycle
-  // ─────────────────────────────────────────────────────────────────────────
+  String get _defaultSubtitle {
+    if (_isAdmin) {
+      return widget.clientEmail ?? 'Client conversation';
+    }
+    return 'Private support conversation';
+  }
+
+  String get _statusSubtitle {
+    if (_otherOnline) return 'Online';
+    if (_otherLastSeen == null) return _defaultSubtitle;
+    return 'Last seen ${_formatTime(_otherLastSeen!)}';
+  }
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _conversationId = widget.conversationId;
-    _init();
+    _scrollCtrl.addListener(_onScroll);
+    _initChat();
 
-    _uiRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+    _uiRefreshTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       if (mounted) setState(() {});
     });
   }
@@ -75,898 +114,1040 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _stopHeartbeat();
-    _channel?.unsubscribe();
-    _presenceChannel?.unsubscribe();
-    _uiRefreshTimer?.cancel();
-    _offlineTimer?.cancel();
     _msgCtrl.dispose();
     _scrollCtrl.dispose();
-    _saveMyLastSeen();
+
+    _uiRefreshTimer?.cancel();
+    _reloadDebounceTimer?.cancel();
+
+    _messageChannel?.unsubscribe();
+    _conversationChannel?.unsubscribe();
+    _statusChannel?.unsubscribe();
+
     super.dispose();
+  }
+
+  Future<void> _initChat() async {
+    if (!mounted) return;
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final user = _supabase.auth.currentUser;
+
+      if (user == null) {
+        throw Exception('User not logged in');
+      }
+
+      if (_conversationId == null || _conversationId!.isEmpty) {
+        _conversationId = await _getOrCreateClientConversation();
+      }
+
+      await _repository.verifyConversation(_conversationId!);
+      await _loadMessages(showLoader: false);
+      await _loadOtherStatus();
+
+      _subscribeRealtime();
+      await _subscribeOtherStatus();
+
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+
+      _scrollToBottom();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'Check your connection and try again.';
+      });
+    }
+  }
+
+  Future<String> _getOrCreateClientConversation() =>
+      _repository.openConversation();
+
+  void _onScroll() {
+    if (_viewingLatest) unawaited(_markConversationRead());
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      _startHeartbeat();
-      // Re-fetch on resume to sync any read receipts missed while backgrounded
-      _refreshMessages();
-    } else if (state == AppLifecycleState.paused ||
-               state == AppLifecycleState.inactive ||
-               state == AppLifecycleState.detached) {
-      _stopHeartbeat();
-      _saveMyLastSeen();
-    }
+    if (state == AppLifecycleState.resumed) unawaited(_safeRefresh());
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Heartbeat
-  // ─────────────────────────────────────────────────────────────────────────
-
-  void _startHeartbeat() {
-    _stopHeartbeat();
-    _trackPresence();
-    _heartbeatTimer = Timer.periodic(const Duration(seconds: 5), (_) {
-      if (mounted) _trackPresence();
-    });
-  }
-
-  void _stopHeartbeat() {
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = null;
-  }
-
-  Future<void> _trackPresence() async {
+  Future<void> _loadMessages({
+    required bool showLoader,
+    bool preservePosition = false,
+  }) async {
+    final id = _conversationId;
+    if (id == null || id.isEmpty) return;
+    final follow = !_scrollCtrl.hasClients || _viewingLatest;
+    if (showLoader && mounted) setState(() => _isRefreshing = true);
     try {
-      await _presenceChannel?.track({
-        'user_id':   _supabase.auth.currentUser?.id,
-        'is_admin':  _isAdmin,
-        'online_at': DateTime.now().toIso8601String(),
+      final data = await _repository.messages(id, limit: _messageLimit);
+      if (!mounted) return;
+      setState(() {
+        _messages = data.map(MessageModel.fromMap).toList();
+        _hasEarlier = data.length == _messageLimit;
       });
-    } catch (e) {
-      debugPrint('>>> Track presence error: $e');
+      if (follow && !preservePosition) _scrollToBottom();
+    } finally {
+      if (mounted && showLoader) setState(() => _isRefreshing = false);
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Init
-  // ─────────────────────────────────────────────────────────────────────────
-
-  Future<void> _init() async {
-    setState(() {
-      _messages      = [];
-      _isLoading     = true;
-      _errorMessage  = null;
-      _isOnline      = false;
-      _otherLastSeen = null;
-    });
-
-    if (_conversationId == null) {
-      await _getOrCreateConversation();
-    }
-
-    if (_conversationId == null) {
-      if (mounted) {
-        setState(() {
-          _isLoading    = false;
-          _errorMessage = 'Could not load conversation. Please try again.';
-        });
-      }
-      return;
-    }
-
-    await _loadMessages();
-    await _loadOtherLastSeen();
-    _subscribeRealtime();
-    _subscribePresence();
-    _subscribeLastSeenRealtime();
-    await _markRead();
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Conversation
-  // ─────────────────────────────────────────────────────────────────────────
-
-  Future<void> _getOrCreateConversation() async {
-    final uid = _supabase.auth.currentUser?.id;
-    if (uid == null) return;
+  Future<void> _loadEarlier() async {
+    if (_loadingEarlier) return;
+    final offset = _scrollCtrl.hasClients ? _scrollCtrl.offset : 0.0;
+    final extent = _scrollCtrl.hasClients
+        ? _scrollCtrl.position.maxScrollExtent
+        : 0.0;
+    setState(() => _loadingEarlier = true);
+    _messageLimit += 80;
     try {
-      final existing = await _supabase
+      await _loadMessages(showLoader: false, preservePosition: true);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _scrollCtrl.hasClients) {
+          _scrollCtrl.jumpTo(
+            (offset + _scrollCtrl.position.maxScrollExtent - extent).clamp(
+              0.0,
+              _scrollCtrl.position.maxScrollExtent,
+            ),
+          );
+        }
+      });
+    } catch (_) {
+      _messageLimit -= 80;
+      _showSnack('Earlier messages could not load. Try again.');
+    } finally {
+      if (mounted) setState(() => _loadingEarlier = false);
+    }
+  }
+
+  Future<void> _markConversationRead() async {
+    final id = _conversationId;
+    if (id == null || _messages.isEmpty || !_viewingLatest) return;
+    final watermark = _messages.last.id;
+    if (_lastReadId == watermark) return;
+    _lastReadId = watermark;
+    try {
+      await _repository.readThrough(id, watermark);
+    } catch (_) {
+      if (_lastReadId == watermark) _lastReadId = null;
+    }
+  }
+
+  Future<String?> _getOtherUserId() async {
+    final id = _conversationId;
+    if (id == null || id.isEmpty) return null;
+
+    if (_isAdmin) {
+      final conversation = await _supabase
           .from('conversations')
+          .select('client_id')
+          .eq('id', id)
+          .maybeSingle()
+          .timeout(const Duration(seconds: 8));
+
+      return conversation?['client_id']?.toString();
+    }
+
+    final adminStatus = await _supabase
+        .from('user_status')
+        .select('user_id')
+        .eq('email', AdminConstants.adminEmail)
+        .maybeSingle()
+        .timeout(const Duration(seconds: 8));
+
+    return adminStatus?['user_id']?.toString();
+  }
+
+  Future<void> _loadOtherStatus() async {
+    try {
+      final otherId = await _getOtherUserId();
+      if (otherId == null) return;
+
+      final data = await _supabase
+          .from('user_status')
           .select()
-          .eq('client_id', uid)
-          .maybeSingle();
-      if (existing != null) {
-        _conversationId = existing['id'];
-      } else {
-        final result = await _supabase
-            .from('conversations')
-            .insert({
-              'client_id':    uid,
-              'client_name':  _senderName,
-              'client_email': _supabase.auth.currentUser?.email,
-            })
-            .select()
-            .single();
-        _conversationId = result['id'];
-      }
-    } catch (e) {
-      debugPrint('>>> Conversation error: $e');
+          .eq('user_id', otherId)
+          .maybeSingle()
+          .timeout(const Duration(seconds: 8));
+
+      if (data == null || !mounted) return;
+
+      setState(() {
+        _otherOnline = data['is_online'] == true;
+        _otherLastSeen = DateTime.tryParse(
+          data['last_seen_at']?.toString() ?? '',
+        );
+      });
+    } catch (_) {
+      // Presence should not break chat.
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Messages
-  // ─────────────────────────────────────────────────────────────────────────
-
-  Future<void> _loadMessages() async {
-    if (_conversationId == null) {
-      if (mounted) setState(() => _isLoading = false);
-      return;
-    }
-    setState(() => _isLoading = true);
-    try {
-      final data = await _supabase
-          .from('messages')
-          .select()
-          .eq('conversation_id', _conversationId!)
-          .order('created_at', ascending: true);
-
-      if (mounted) {
-        final list = (data as List)
-            .map((e) => MessageModel.fromMap(e))
-            .toList();
-        list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-        setState(() {
-          _messages  = list;
-          _isLoading = false;
-        });
-        _scrollToBottom();
-      }
-    } catch (e) {
-      debugPrint('>>> Load messages error: $e');
-      if (mounted) {
-        setState(() {
-          _isLoading    = false;
-          _errorMessage = 'Failed to load messages: $e';
-        });
-      }
-    }
+  void _scheduleRealtimeReload() {
+    _reloadDebounceTimer?.cancel();
+    _reloadDebounceTimer = Timer(const Duration(milliseconds: 450), () {
+      if (mounted) _safeRefresh();
+    });
   }
 
-  /// Silent refresh — re-fetches all messages without showing a loader.
-  /// Used to sync is_read flags after mark-read or app resume.
-  Future<void> _refreshMessages() async {
-    if (_conversationId == null) return;
+  Future<void> _safeRefresh() async {
     try {
-      final data = await _supabase
-          .from('messages')
-          .select()
-          .eq('conversation_id', _conversationId!)
-          .order('created_at', ascending: true);
-
-      if (mounted) {
-        final list = (data as List)
-            .map((e) => MessageModel.fromMap(e))
-            .toList();
-        list.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-        setState(() => _messages = list);
-      }
-    } catch (e) {
-      debugPrint('>>> Refresh messages error: $e');
-    }
+      await _loadMessages(showLoader: false);
+      await _markConversationRead();
+      await _loadOtherStatus();
+    } catch (_) {}
   }
 
   void _subscribeRealtime() {
-    if (_conversationId == null) return;
-    _channel?.unsubscribe();
-    _channel = _supabase
-        .channel('messages_$_conversationId')
-        // ── New message inserted ──────────────────────────────────────────
+    final id = _conversationId;
+    if (id == null || id.isEmpty) return;
+
+    _messageChannel?.unsubscribe();
+    _conversationChannel?.unsubscribe();
+
+    _messageChannel = _supabase
+        .channel('chat_messages_$id')
         .onPostgresChanges(
-          event:  PostgresChangeEvent.insert,
+          event: PostgresChangeEvent.all,
           schema: 'public',
-          table:  'messages',
+          table: 'messages',
           filter: PostgresChangeFilter(
-            type:   PostgresChangeFilterType.eq,
+            type: PostgresChangeFilterType.eq,
             column: 'conversation_id',
-            value:  _conversationId!,
+            value: id,
           ),
-          callback: (payload) async {
-            final msg = MessageModel.fromMap(payload.newRecord);
-            if (mounted) {
-              setState(() {
-                final exists = _messages.any((m) => m.id == msg.id);
-                if (!exists) {
-                  _messages.add(msg);
-                  _messages.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-                }
-              });
-              _scrollToBottom();
-              // Mark the newly received message as read, then refresh ticks
-              await _markRead();
-            }
-          },
-        )
-        // ── Message updated (is_read toggled → double tick) ───────────────
-        .onPostgresChanges(
-          event:  PostgresChangeEvent.update,
-          schema: 'public',
-          table:  'messages',
-          filter: PostgresChangeFilter(
-            type:   PostgresChangeFilterType.eq,
-            column: 'conversation_id',
-            value:  _conversationId!,
-          ),
-          callback: (payload) {
-            if (!mounted) return;
-            final updatedMsg = MessageModel.fromMap(payload.newRecord);
-            setState(() {
-              final idx = _messages.indexWhere((m) => m.id == updatedMsg.id);
-              if (idx != -1) {
-                _messages[idx] = updatedMsg;
-              }
-            });
-          },
+          callback: (_) => _scheduleRealtimeReload(),
         )
         .subscribe();
-  }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Last Seen — DB based
-  // ─────────────────────────────────────────────────────────────────────────
-
-  Future<void> _saveMyLastSeen() async {
-    if (_conversationId == null) return;
-    try {
-      final column = _isAdmin ? 'admin_last_seen' : 'client_last_seen';
-      await _supabase
-          .from('conversations')
-          .update({column: DateTime.now().toIso8601String()})
-          .eq('id', _conversationId!);
-    } catch (e) {
-      debugPrint('>>> Save last seen error: $e');
-    }
-  }
-
-  Future<void> _loadOtherLastSeen() async {
-    if (_conversationId == null) return;
-    try {
-      final data = await _supabase
-          .from('conversations')
-          .select('client_last_seen, admin_last_seen')
-          .eq('id', _conversationId!)
-          .single();
-
-      final col = _isAdmin ? 'client_last_seen' : 'admin_last_seen';
-      final raw = data[col];
-      if (raw != null && mounted) {
-        setState(() => _otherLastSeen = DateTime.tryParse(raw.toString()));
-      }
-    } catch (e) {
-      debugPrint('>>> Load last seen error: $e');
-    }
-  }
-
-  void _subscribeLastSeenRealtime() {
-    if (_conversationId == null) return;
-    _supabase
-        .channel('last_seen_$_conversationId')
+    _conversationChannel = _supabase
+        .channel('chat_conversation_$id')
         .onPostgresChanges(
-          event:  PostgresChangeEvent.update,
+          event: PostgresChangeEvent.all,
           schema: 'public',
-          table:  'conversations',
+          table: 'conversations',
           filter: PostgresChangeFilter(
-            type:   PostgresChangeFilterType.eq,
+            type: PostgresChangeFilterType.eq,
             column: 'id',
-            value:  _conversationId!,
+            value: id,
           ),
-          callback: (payload) {
-            final col = _isAdmin ? 'client_last_seen' : 'admin_last_seen';
-            final raw = payload.newRecord[col];
-            if (raw != null && mounted) {
-              setState(() => _otherLastSeen = DateTime.tryParse(raw.toString()));
-            }
-          },
+          callback: (_) => _scheduleRealtimeReload(),
         )
         .subscribe();
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Presence
-  // ─────────────────────────────────────────────────────────────────────────
-
-  void _subscribePresence() {
-    if (_conversationId == null) return;
-    _presenceChannel?.unsubscribe();
-
-    _presenceChannel = _supabase
-        .channel('presence_room_$_conversationId',
-            opts: const RealtimeChannelConfig(ack: true))
-        .onPresenceSync((_)  => _updateOnlineStatus())
-        .onPresenceJoin((_)  => _updateOnlineStatus())
-        .onPresenceLeave((_) => _handlePresenceLeave())
-        .subscribe((status, [error]) async {
-          if (status == RealtimeSubscribeStatus.subscribed) {
-            _startHeartbeat();
-          }
-        });
-  }
-
-  bool _isOtherUserOnline() {
-    final currentUserId = _supabase.auth.currentUser?.id;
-    final presenceList  = _presenceChannel?.presenceState();
-    if (presenceList == null || presenceList.isEmpty) return false;
-
-    for (final presence in presenceList) {
-      for (final p in presence.presences) {
-        final payload = p.payload;
-        if (payload['user_id'] != null &&
-            payload['user_id'] != currentUserId) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  void _updateOnlineStatus() {
-    final otherOnline = _isOtherUserOnline();
-    if (otherOnline) {
-      _offlineTimer?.cancel();
-      _offlineTimer = null;
-      if (mounted && !_isOnline) {
-        setState(() => _isOnline = true);
-        // Other user just came online — refresh to pick up ticks they already read
-        _refreshMessages();
-      }
-    }
-  }
-
-  void _handlePresenceLeave() {
-    _offlineTimer?.cancel();
-    _offlineTimer = Timer(const Duration(seconds: 5), () {
-      if (!mounted) return;
-      final otherStillOnline = _isOtherUserOnline();
-      if (!otherStillOnline) {
-        setState(() => _isOnline = false);
-        _loadOtherLastSeen();
-      }
-    });
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Mark read
-  // 1. Sets conversation-level read flag.
-  // 2. Sets is_read=true on all messages sent by the OTHER party.
-  // 3. Calls _refreshMessages() so the SENDER's screen immediately
-  //    shows double ticks without waiting for a realtime event.
-  // ─────────────────────────────────────────────────────────────────────────
-
-  Future<void> _markRead() async {
-    if (_conversationId == null) return;
+  Future<void> _subscribeOtherStatus() async {
     try {
-      // Conversation-level flag
-      if (_isAdmin) {
-        await _supabase
-            .from('conversations')
-            .update({'is_read_admin': true})
-            .eq('id', _conversationId!);
-      } else {
-        await _supabase
-            .from('conversations')
-            .update({'is_read_client': true})
-            .eq('id', _conversationId!);
-      }
+      final otherId = await _getOtherUserId();
+      if (otherId == null) return;
 
-      // Mark individual messages from the other party as read
-      final myId = _supabase.auth.currentUser?.id;
-      if (myId != null) {
-        await _supabase
-            .from('messages')
-            .update({'is_read': true})
-            .eq('conversation_id', _conversationId!)
-            .neq('sender_id', myId)
-            .eq('is_read', false);
-      }
+      _statusChannel?.unsubscribe();
 
-      // Force a local refresh so our own sent messages flip to double tick
-      await _refreshMessages();
-    } catch (e) {
-      debugPrint('>>> Mark read error: $e');
-    }
+      _statusChannel = _supabase
+          .channel('chat_user_status_$otherId')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'user_status',
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'user_id',
+              value: otherId,
+            ),
+            callback: (_) => _loadOtherStatus(),
+          )
+          .subscribe();
+    } catch (_) {}
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Send message
-  // ─────────────────────────────────────────────────────────────────────────
+  Future<void> _sendPushForInsertedMessage(String messageId) async {
+    if (!_isAdmin) return;
+    try {
+      await _supabase.functions
+          .invoke('send-chat-push', body: {'message_id': messageId})
+          .timeout(const Duration(seconds: 15));
+    } catch (_) {
+      /* Message delivery is independent of push delivery. */
+    }
+  }
 
   Future<void> _sendMessage() async {
     final text = _msgCtrl.text.trim();
-    if (text.isEmpty || _conversationId == null) return;
-
-    _msgCtrl.clear();
+    final id = _conversationId;
+    if (text.isEmpty || _isBusy || id == null) return;
+    if (text.length > 4000) {
+      _showSnack('Keep messages below 4,000 characters.');
+      return;
+    }
+    if (_pendingText?.content != text || _pendingText?.conversationId != id) {
+      _pendingText = PendingTextMessage(id, text);
+    }
     setState(() => _isSending = true);
-
     try {
-      await _supabase.from('messages').insert({
-        'conversation_id': _conversationId,
-        'sender_id':       _supabase.auth.currentUser?.id,
-        'sender_name':     _senderName,
-        'sender_role':     _isAdmin ? 'admin' : 'client',
-        'content':         text,
-        'is_read':         false,
-      });
-    } catch (e) {
-      debugPrint('>>> Send message error: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Failed to send: $e'),
-          backgroundColor: AppColors.error,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12)),
-          margin: const EdgeInsets.all(16),
-        ));
-      }
+      final sentId = await _repository.sendText(_pendingText!);
+      _pendingText = null;
+      if (!mounted) return;
+      if (_msgCtrl.text.trim() == text) _msgCtrl.clear();
+      unawaited(_sendPushForInsertedMessage(sentId));
+      await _safeRefresh();
+      _scrollToBottom();
+    } catch (_) {
+      _showSnack(
+        'Message was not confirmed. Your draft is kept; tap send to retry.',
+      );
     } finally {
       if (mounted) setState(() => _isSending = false);
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Helpers
-  // ─────────────────────────────────────────────────────────────────────────
+  Future<void> _pickAndSendImage() async {
+    if (_isBusy) return;
+    try {
+      final image =
+          _pendingImage ??
+          await _imagePicker.pickImage(
+            source: ImageSource.gallery,
+            imageQuality: 82,
+            maxWidth: 1600,
+          );
+      if (image == null || !mounted) return;
+      _pendingImage = image;
+      _pendingImageId ??= newMessageId();
+      await _sendImageMessage(image);
+    } catch (_) {
+      _showSnack('Image could not be selected. Try again.');
+    }
+  }
+
+  String _getMimeType(String fileName, String? pickerMimeType) {
+    if (pickerMimeType != null && pickerMimeType.trim().isNotEmpty) {
+      return pickerMimeType;
+    }
+
+    final ext = fileName.split('.').last.toLowerCase();
+
+    switch (ext) {
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg';
+      case 'png':
+        return 'image/png';
+      case 'webp':
+        return 'image/webp';
+      case 'gif':
+        return 'image/gif';
+      case 'heic':
+        return 'image/heic';
+      case 'heif':
+        return 'image/heif';
+      default:
+        return 'image/jpeg';
+    }
+  }
+
+  String _sanitizeFileName(String name) {
+    final sanitized = name
+        .replaceAll(RegExp(r'[^a-zA-Z0-9._\-]'), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .toLowerCase();
+
+    if (sanitized.isEmpty || sanitized == '_') {
+      return 'image_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    }
+
+    return sanitized;
+  }
+
+  Future<void> _sendImageMessage(XFile image) async {
+    final id = _conversationId;
+    if (id == null) return;
+    setState(() => _isUploadingAttachment = true);
+    try {
+      final name = _sanitizeFileName(image.name);
+      final sentId = await _repository.sendImage(
+        conversationId: id,
+        id: _pendingImageId!,
+        fileName: name,
+        mimeType: _getMimeType(name, image.mimeType),
+        bytes: await image.readAsBytes(),
+      );
+      _pendingImage = null;
+      _pendingImageId = null;
+      if (!mounted) return;
+      unawaited(_sendPushForInsertedMessage(sentId));
+      await _safeRefresh();
+      _scrollToBottom();
+    } on ArgumentError {
+      _pendingImage = null;
+      _pendingImageId = null;
+      _showSnack('Choose a JPEG, PNG, WebP or GIF image below 10 MB.');
+    } catch (_) {
+      _showSnack(
+        'Image was not confirmed. Tap attach to retry the same image.',
+      );
+    } finally {
+      if (mounted) setState(() => _isUploadingAttachment = false);
+    }
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: AppColors.error,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(16),
+      ),
+    );
+  }
 
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollCtrl.hasClients) {
-        _scrollCtrl.animateTo(
-          _scrollCtrl.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
+      if (!mounted || !_scrollCtrl.hasClients) return;
+
+      if (MediaQuery.disableAnimationsOf(context)) {
+        _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
+        unawaited(_markConversationRead());
+        return;
       }
+      _scrollCtrl
+          .animateTo(
+            _scrollCtrl.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 260),
+            curve: Curves.easeOut,
+          )
+          .then((_) {
+            if (mounted) unawaited(_markConversationRead());
+          });
     });
   }
 
-  String _formatTime(DateTime dt) {
-    final h = dt.hour.toString().padLeft(2, '0');
-    final m = dt.minute.toString().padLeft(2, '0');
-    return '$h:$m';
-  }
-
-  String _formatDate(DateTime dt) {
-    final now    = DateTime.now();
-    final today  = DateTime(now.year, now.month, now.day);
-    final msgDay = DateTime(dt.year, dt.month, dt.day);
-    if (msgDay == today) return 'Today';
-    if (msgDay == today.subtract(const Duration(days: 1))) return 'Yesterday';
-    return '${dt.day}/${dt.month}/${dt.year}';
-  }
-
-  String _formatTime12h(DateTime dt) {
-    final hour   = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
-    final minute = dt.minute.toString().padLeft(2, '0');
-    final period = dt.hour < 12 ? 'am' : 'pm';
-    return '$hour:$minute $period';
-  }
-
-  String _formatLastSeen(DateTime dt) {
-    final now     = DateTime.now();
-    final today   = DateTime(now.year, now.month, now.day);
-    final seenDay = DateTime(dt.year, dt.month, dt.day);
-    final timeStr = _formatTime12h(dt);
-    if (seenDay == today) return 'last seen today at $timeStr';
-    if (seenDay == today.subtract(const Duration(days: 1))) {
-      return 'last seen yesterday at $timeStr';
+  void _safeBack() {
+    if (context.canPop()) {
+      context.pop();
+      return;
     }
-    return 'last seen ${dt.day}/${dt.month}/${dt.year} at $timeStr';
+
+    if (_isAdmin) {
+      context.go('/admin/dashboard');
+    } else {
+      context.go('/feed');
+    }
   }
 
-  String get _presenceText {
-    if (_isOnline)              return 'Online';
-    if (_otherLastSeen != null) return _formatLastSeen(_otherLastSeen!);
-    return 'Offline';
+  Future<void> _retry() async {
+    await _initChat();
   }
 
-  Color get _presenceColor {
-    if (_isOnline) return AppColors.accent;
-    return const Color(0xFF94A3B8);
+  String _formatTime(DateTime date) {
+    final now = DateTime.now();
+    final diff = now.difference(date);
+
+    if (diff.inMinutes < 1) return 'Just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays == 1) return 'Yesterday';
+
+    return '${date.day}/${date.month}/${date.year}';
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Build
-  // ─────────────────────────────────────────────────────────────────────────
+  String _formatMessageTime(DateTime date) {
+    final hour = date.hour.toString().padLeft(2, '0');
+    final minute = date.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
 
   @override
   Widget build(BuildContext context) {
-    final title = _isAdmin
-        ? (widget.clientName ?? widget.clientEmail ?? 'Client')
-        : 'Tokilo Support';
-
     return Scaffold(
-      backgroundColor: const Color(0xFFF0F4F8),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF03404E),
-        elevation: 0,
+        toolbarHeight: 72,
+        backgroundColor: Colors.white,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_rounded,
-              color: Colors.white, size: 20),
-          onPressed: () => Navigator.pop(context),
+          tooltip: 'Back',
+          icon: const Icon(Icons.arrow_back_rounded),
+          onPressed: _safeBack,
         ),
+        titleSpacing: 0,
         title: Row(
           children: [
             CircleAvatar(
-              radius: 18,
-              backgroundColor: AppColors.accent.withOpacity(0.25),
+              radius: 22,
+              backgroundColor: const Color(0xFFE7F2F1),
+              foregroundColor: AppColors.primary,
               child: Text(
-                title.isNotEmpty ? title[0].toUpperCase() : 'T',
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 15),
+                _isAdmin ? 'C' : 'T',
+                style: const TextStyle(fontWeight: FontWeight.w600),
               ),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    title,
+                    _appBarTitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15),
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                  Row(
-                    children: [
-                      Container(
-                        width: 7, height: 7,
-                        decoration: BoxDecoration(
-                          color: _presenceColor,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      Flexible(
-                        child: Text(
-                          _presenceText,
-                          style: TextStyle(
-                            color: _presenceColor,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w500,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
+                  const SizedBox(height: 3),
+                  Text(
+                    _statusSubtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: _otherOnline
+                          ? AppColors.primary
+                          : AppColors.textSecondary,
+                    ),
                   ),
                 ],
               ),
             ),
           ],
         ),
-      ),
-      resizeToAvoidBottomInset: true,
-      body: SafeArea(
-        child: Column(
-          children: [
-            Expanded(child: _buildBody()),
-            _buildInputBar(),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildBody() {
-    if (_isLoading) {
-      return const Center(
-          child: CircularProgressIndicator(color: AppColors.primary));
-    }
-    if (_errorMessage != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.error_outline_rounded,
-                  size: 48, color: Color(0xFFEF4444)),
-              const SizedBox(height: 16),
-              Text(_errorMessage!,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                      fontSize: 14, color: Color(0xFF64748B))),
-              const SizedBox(height: 20),
-              ElevatedButton.icon(
-                onPressed: () {
-                  setState(() {
-                    _isLoading      = true;
-                    _errorMessage   = null;
-                    _conversationId = null;
-                  });
-                  _init();
-                },
-                icon: const Icon(Icons.refresh_rounded),
-                label: const Text('Retry'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-              ),
-            ],
+        actions: [
+          IconButton(
+            tooltip: 'Refresh conversation',
+            icon: _isRefreshing
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.refresh_rounded, size: 22),
+            onPressed: _isRefreshing
+                ? null
+                : () async {
+                    try {
+                      await _loadMessages(showLoader: true);
+                      await _markConversationRead();
+                      await _loadOtherStatus();
+                    } catch (_) {
+                      _showSnack('Refresh failed. Try again.');
+                    }
+                  },
           ),
-        ),
-      );
-    }
-
-    if (_messages.isEmpty) return _emptyState();
-
-    return ListView.builder(
-      controller: _scrollCtrl,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      itemCount: _messages.length,
-      itemBuilder: (_, i) {
-        final msg      = _messages[i];
-        final prevMsg  = i > 0 ? _messages[i - 1] : null;
-        final showDate = prevMsg == null ||
-            _formatDate(msg.createdAt) != _formatDate(prevMsg.createdAt);
-        final isMine   = msg.senderId == _supabase.auth.currentUser?.id;
-        return Column(
-          children: [
-            if (showDate) _dateDivider(msg.createdAt),
-            _MessageBubble(
-              message: msg,
-              isMine:  isMine,
-              timeStr: _formatTime(msg.createdAt),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _dateDivider(DateTime dt) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        child: Row(children: [
-          const Expanded(child: Divider(color: Color(0xFFCBD5E1))),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Text(_formatDate(dt),
-                style: const TextStyle(
-                    fontSize: 11,
-                    color: Color(0xFF94A3B8),
-                    fontWeight: FontWeight.w500)),
-          ),
-          const Expanded(child: Divider(color: Color(0xFFCBD5E1))),
-        ]),
-      );
-
-  Widget _emptyState() => Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 80, height: 80,
-              decoration: BoxDecoration(
-                color: AppColors.primary.withOpacity(0.08),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.chat_bubble_outline_rounded,
-                  size: 36, color: AppColors.primary),
-            ),
-            const SizedBox(height: 16),
-            const Text('No messages yet',
-                style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF0F172A))),
-            const SizedBox(height: 6),
-            Text(
-              _isAdmin
-                  ? 'Client messages will appear here'
-                  : 'Send a message to the Tokilo team',
-              style: const TextStyle(fontSize: 13, color: Color(0xFF94A3B8)),
-            ),
-          ],
-        ),
-      );
-
-  Widget _buildInputBar() {
-    return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-              color: Color(0x0F000000),
-              blurRadius: 10,
-              offset: Offset(0, -4))
+          const SizedBox(width: 6),
         ],
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      body: _isLoading
+          ? const Center(
+              child: CircularProgressIndicator(color: AppColors.primary),
+            )
+          : _errorMessage != null
+          ? _ErrorState(
+              message: 'Could not open chat.\n$_errorMessage',
+              onRetry: _retry,
+            )
+          : Column(
+              children: [
+                Expanded(
+                  child: _messages.isEmpty
+                      ? const _EmptyMessages()
+                      : RefreshIndicator(
+                          color: AppColors.primary,
+                          onRefresh: () async {
+                            await _loadMessages(showLoader: false);
+                            await _markConversationRead();
+                          },
+                          child: ListView.builder(
+                            controller: _scrollCtrl,
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+                            itemCount: _messages.length + (_hasEarlier ? 1 : 0),
+                            itemBuilder: (context, index) {
+                              if (_hasEarlier && index == 0) {
+                                return TextButton(
+                                  onPressed: _loadingEarlier
+                                      ? null
+                                      : _loadEarlier,
+                                  child: Text(
+                                    _loadingEarlier
+                                        ? 'Loading…'
+                                        : 'Load earlier messages',
+                                  ),
+                                );
+                              }
+                              final message =
+                                  _messages[index - (_hasEarlier ? 1 : 0)];
+                              final mine =
+                                  message.senderId ==
+                                  _supabase.auth.currentUser?.id;
+
+                              return _MessageBubble(
+                                message: message,
+                                isMine: mine,
+                                timeLabel: _formatMessageTime(
+                                  message.createdAt,
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                ),
+                _ChatInputBar(
+                  controller: _msgCtrl,
+                  busy: _isBusy,
+                  isSending: _isSending,
+                  isUploading: _isUploadingAttachment,
+                  onSend: _sendMessage,
+                  onPickImage: _pickAndSendImage,
+                ),
+              ],
+            ),
+    );
+  }
+}
+
+class _ChatInputBar extends StatelessWidget {
+  final TextEditingController controller;
+  final bool busy;
+  final bool isSending;
+  final bool isUploading;
+  final VoidCallback onSend;
+  final VoidCallback onPickImage;
+
+  const _ChatInputBar({
+    required this.controller,
+    required this.busy,
+    required this.isSending,
+    required this.isUploading,
+    required this.onSend,
+    required this.onPickImage,
+  });
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+    top: false,
+    child: Container(
+      padding: const EdgeInsets.fromLTRB(8, 10, 14, 10),
+      color: Colors.white,
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
+          IconButton(
+            tooltip: 'Attach image',
+            onPressed: busy ? null : onPickImage,
+            icon: isUploading
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(
+                    Icons.add_photo_alternate_outlined,
+                    color: AppColors.primary,
+                  ),
+          ),
           Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                color: const Color(0xFFF1F5F9),
-                borderRadius: BorderRadius.circular(24),
-              ),
-              child: TextField(
-                controller: _msgCtrl,
-                maxLines: 4,
-                minLines: 1,
-                textCapitalization: TextCapitalization.sentences,
-                decoration: const InputDecoration(
-                  hintText: 'Type a message...',
-                  hintStyle:
-                      TextStyle(color: Color(0xFF94A3B8), fontSize: 14),
-                  border: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(
-                      horizontal: 18, vertical: 12),
+            child: TextField(
+              controller: controller,
+              maxLines: 4,
+              minLines: 1,
+              enabled: !busy,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: InputDecoration(
+                hintText: 'Message Tokilo…',
+                fillColor: AppColors.background,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                  borderSide: BorderSide.none,
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                  borderSide: BorderSide.none,
                 ),
               ),
+              onSubmitted: (_) {
+                if (!busy) onSend();
+              },
             ),
           ),
           const SizedBox(width: 10),
-          GestureDetector(
-            onTap: _isSending ? null : _sendMessage,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              width: 46, height: 46,
-              decoration: BoxDecoration(
-                gradient: AppColors.primaryGradient,
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                      color: AppColors.primary.withOpacity(0.35),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4))
-                ],
-              ),
-              child: _isSending
-                  ? const Center(
-                      child: SizedBox(
-                        width: 20, height: 20,
-                        child: CircularProgressIndicator(
-                            color: Colors.white, strokeWidth: 2),
-                      ),
-                    )
-                  : const Icon(Icons.send_rounded,
-                      color: Colors.white, size: 20),
+          IconButton.filled(
+            tooltip: 'Send message',
+            onPressed: busy ? null : onSend,
+            style: IconButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              minimumSize: const Size(48, 48),
             ),
+            icon: isSending
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      color: Colors.white,
+                      strokeWidth: 2,
+                    ),
+                  )
+                : const Icon(
+                    Icons.arrow_upward_rounded,
+                    color: Colors.white,
+                    size: 23,
+                  ),
           ),
         ],
+      ),
+    ),
+  );
+}
+
+class _MessageBubble extends StatelessWidget {
+  final MessageModel message;
+  final bool isMine;
+  final String timeLabel;
+
+  const _MessageBubble({
+    required this.message,
+    required this.isMine,
+    required this.timeLabel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bubbleColor = isMine ? const Color(0xFFDDEFEA) : AppColors.surface;
+    const textColor = AppColors.textPrimary;
+    final metaColor = AppColors.textSecondary;
+    final bool isSeen = message.isRead || message.seenAt != null;
+
+    return Align(
+      alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.80,
+        ),
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: EdgeInsets.fromLTRB(
+          message.isImage ? 6 : 14,
+          message.isImage ? 6 : 10,
+          message.isImage ? 6 : 14,
+          8,
+        ),
+        decoration: BoxDecoration(
+          color: bubbleColor,
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(18),
+            topRight: const Radius.circular(18),
+            bottomLeft: Radius.circular(isMine ? 18 : 4),
+            bottomRight: Radius.circular(isMine ? 4 : 18),
+          ),
+          border: isMine ? null : Border.all(color: AppColors.border),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.035),
+              blurRadius: 8,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: isMine
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
+          children: [
+            if (!isMine && message.senderName != null) ...[
+              Padding(
+                padding: EdgeInsets.only(
+                  left: message.isImage ? 6 : 0,
+                  right: message.isImage ? 6 : 0,
+                  top: message.isImage ? 4 : 0,
+                ),
+                child: Text(
+                  message.senderName!,
+                  style: TextStyle(
+                    color: metaColor,
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 5),
+            ],
+            if (message.isImage && message.attachmentUrl != null)
+              _ChatImageAttachment(imageUrl: message.attachmentUrl!)
+            else if (message.isImage)
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('Image unavailable. Refresh to try again.'),
+              )
+            else
+              Text(
+                message.content,
+                style: TextStyle(
+                  color: textColor,
+                  fontSize: 14.5,
+                  height: 1.38,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            const SizedBox(height: 5),
+            Padding(
+              padding: EdgeInsets.only(
+                left: message.isImage ? 6 : 0,
+                right: message.isImage ? 6 : 0,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    timeLabel,
+                    style: TextStyle(
+                      color: metaColor,
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (isMine) ...[
+                    const SizedBox(width: 4),
+                    Icon(
+                      isSeen ? Icons.done_all_rounded : Icons.done_rounded,
+                      color: isSeen
+                          ? AppColors.primary
+                          : AppColors.textSecondary,
+                      size: 15,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MESSAGE BUBBLE
-// ─────────────────────────────────────────────────────────────────────────────
-class _MessageBubble extends StatelessWidget {
-  final MessageModel message;
-  final bool         isMine;
-  final String       timeStr;
+class _ChatImageAttachment extends StatelessWidget {
+  final String imageUrl;
 
-  const _MessageBubble({
-    required this.message,
-    required this.isMine,
-    required this.timeStr,
-  });
+  const _ChatImageAttachment({required this.imageUrl});
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Row(
-        mainAxisAlignment:
-            isMine ? MainAxisAlignment.end : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          if (!isMine) ...[
-            CircleAvatar(
-              radius: 14,
-              backgroundColor: AppColors.primary.withOpacity(0.1),
-              child: Text(
-                (message.senderName ?? 'T').substring(0, 1).toUpperCase(),
-                style: const TextStyle(
+    return GestureDetector(
+      onTap: () => _showImagePreview(context, imageUrl),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          color: Colors.black.withOpacity(0.04),
+          child: Image.network(
+            imageUrl,
+            width: 230,
+            height: 260,
+            fit: BoxFit.cover,
+            loadingBuilder: (context, child, progress) {
+              if (progress == null) return child;
+
+              return const SizedBox(
+                width: 230,
+                height: 220,
+                child: Center(
+                  child: CircularProgressIndicator(
                     color: AppColors.primary,
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold),
-              ),
-            ),
-            const SizedBox(width: 6),
-          ],
-          Flexible(
-            child: Container(
-              constraints: BoxConstraints(
-                maxWidth: MediaQuery.of(context).size.width * 0.72,
-              ),
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: isMine ? const Color(0xFF03404E) : Colors.white,
-                borderRadius: BorderRadius.only(
-                  topLeft:     const Radius.circular(18),
-                  topRight:    const Radius.circular(18),
-                  bottomLeft:  Radius.circular(isMine ? 18 : 4),
-                  bottomRight: Radius.circular(isMine ? 4 : 18),
+                    strokeWidth: 2,
+                  ),
                 ),
-                boxShadow: [
-                  BoxShadow(
-                      color: Colors.black.withOpacity(0.06),
-                      blurRadius: 6,
-                      offset: const Offset(0, 2))
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  if (!isMine) ...[
+              );
+            },
+            errorBuilder: (_, __, ___) {
+              return Container(
+                width: 230,
+                height: 150,
+                padding: const EdgeInsets.all(16),
+                color: AppColors.background,
+                child: const Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.broken_image_rounded,
+                      color: AppColors.textHint,
+                      size: 34,
+                    ),
+                    SizedBox(height: 8),
                     Text(
-                      message.isAdmin
-                          ? 'Tokilo Team'
-                          : (message.senderName ?? 'Client'),
+                      'Image unavailable',
                       style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.primary.withOpacity(0.8)),
-                    ),
-                    const SizedBox(height: 3),
-                  ],
-                  Text(
-                    message.content,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: isMine
-                          ? Colors.white
-                          : const Color(0xFF1E293B),
-                      height: 1.4,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        timeStr,
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: isMine
-                              ? Colors.white.withOpacity(0.6)
-                              : const Color(0xFF94A3B8),
-                        ),
+                        color: AppColors.textSecondary,
+                        fontSize: 12,
                       ),
-                      if (isMine) ...[
-                        const SizedBox(width: 4),
-                        // ✓  sent  — single grey tick
-                        // ✓✓ seen  — double coloured tick
-                        Icon(
-                          message.isRead
-                              ? Icons.done_all_rounded
-                              : Icons.done_rounded,
-                          size: 14,
-                          color: message.isRead
-                              ? AppColors.accent
-                              : Colors.white.withOpacity(0.6),
-                        ),
-                      ],
-                    ],
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showImagePreview(BuildContext context, String url) {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black87,
+      builder: (_) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.all(12),
+          child: Stack(
+            children: [
+              Center(
+                child: InteractiveViewer(
+                  minScale: 0.8,
+                  maxScale: 4,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: Image.network(
+                      url,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) {
+                        return Container(
+                          padding: const EdgeInsets.all(24),
+                          color: Colors.white,
+                          child: const Text('Could not load image'),
+                        );
+                      },
+                    ),
                   ),
-                ],
+                ),
+              ),
+              Positioned(
+                top: 10,
+                right: 10,
+                child: GestureDetector(
+                  onTap: () => Navigator.pop(context),
+                  child: Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.55),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.close_rounded, color: Colors.white),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _EmptyMessages extends StatelessWidget {
+  const _EmptyMessages();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.all(28),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.chat_bubble_outline_rounded,
+              size: 76,
+              color: AppColors.textHint,
+            ),
+            SizedBox(height: 16),
+            Text(
+              'No messages yet',
+              style: TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
               ),
             ),
-          ),
-          if (isMine) const SizedBox(width: 6),
-        ],
+            SizedBox(height: 8),
+            Text(
+              'Send a message or image to start the conversation.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 13,
+                height: 1.45,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ErrorState extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+
+  const _ErrorState({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(26),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(
+              Icons.error_outline_rounded,
+              color: AppColors.error,
+              size: 72,
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Chat Error',
+              style: TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 13,
+                height: 1.45,
+              ),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: onRetry,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+              ),
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('Try Again'),
+            ),
+          ],
+        ),
       ),
     );
   }

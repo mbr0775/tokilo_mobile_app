@@ -9,27 +9,27 @@ class BottomNavShell extends StatelessWidget {
 
   static const List<_NavItem> _navItems = [
     _NavItem(
+      label: 'Feed',
+      icon: Icons.view_stream_outlined,
+      activeIcon: Icons.view_stream_rounded,
+      path: '/feed',
+    ),
+    _NavItem(
       label: 'Home',
       icon: Icons.home_outlined,
       activeIcon: Icons.home_rounded,
       path: '/home',
     ),
     _NavItem(
-      label: 'Portal',
-      icon: Icons.work_outline_rounded,
-      activeIcon: Icons.work_rounded,
+      label: 'Requests',
+      icon: Icons.assignment_outlined,
+      activeIcon: Icons.assignment_rounded,
       path: '/portal',
     ),
     _NavItem(
-      label: 'Tools',
-      icon: Icons.build_outlined,
-      activeIcon: Icons.build_rounded,
-      path: '/tools',
-    ),
-    _NavItem(
-      label: 'Market',
-      icon: Icons.storefront_outlined,
-      activeIcon: Icons.storefront_rounded,
+      label: 'Prices',
+      icon: Icons.payments_outlined,
+      activeIcon: Icons.payments_rounded,
       path: '/marketplace',
     ),
     _NavItem(
@@ -42,8 +42,19 @@ class BottomNavShell extends StatelessWidget {
 
   int _currentIndex(BuildContext context) {
     final location = GoRouterState.of(context).matchedLocation;
-    final index = _navItems.indexWhere((item) => location.startsWith(item.path));
-    return index < 0 ? 0 : index;
+    if (location.startsWith('/feed')) return 0;
+    if (location.startsWith('/home')) return 1;
+    if (location.startsWith('/portal')) return 2;
+    if (location.startsWith('/marketplace')) return 3;
+    if (location.startsWith('/profile')) return 4;
+    return 0;
+  }
+
+  void _onTap(BuildContext context, int index) {
+    final item = _navItems[index];
+    final current = GoRouterState.of(context).matchedLocation;
+    if (current == item.path) return;
+    context.go(item.path);
   }
 
   @override
@@ -52,65 +63,29 @@ class BottomNavShell extends StatelessWidget {
 
     return Scaffold(
       body: child,
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.06),
-              blurRadius: 20,
-              offset: const Offset(0, -4),
-            ),
-          ],
+      bottomNavigationBar: DecoratedBox(
+        decoration: const BoxDecoration(
+          border: Border(top: BorderSide(color: AppColors.border)),
         ),
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: List.generate(_navItems.length, (index) {
-                final item = _navItems[index];
-                final isActive = currentIndex == index;
-
-                return GestureDetector(
-                  onTap: () => context.go(item.path),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 250),
-                    curve: Curves.easeInOut,
-                    padding: EdgeInsets.symmetric(
-                      horizontal: isActive ? 16 : 12,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isActive ? AppColors.primary.withOpacity(0.1) : Colors.transparent,
-                      borderRadius: BorderRadius.circular(50),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          isActive ? item.activeIcon : item.icon,
-                          color: isActive ? AppColors.primary : AppColors.textHint,
-                          size: 22,
-                        ),
-                        if (isActive) ...[
-                          const SizedBox(width: 6),
-                          Text(
-                            item.label,
-                            style: const TextStyle(
-                              color: AppColors.primary,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                );
-              }),
-            ),
-          ),
+        child: NavigationBar(
+          height: 72,
+          animationDuration: MediaQuery.disableAnimationsOf(context)
+              ? Duration.zero
+              : const Duration(milliseconds: 280),
+          selectedIndex: currentIndex,
+          onDestinationSelected: (index) => _onTap(context, index),
+          destinations: [
+            for (final item in _navItems)
+              NavigationDestination(
+                icon: Icon(item.icon, size: 23, color: AppColors.textSecondary),
+                selectedIcon: Icon(
+                  item.activeIcon,
+                  size: 23,
+                  color: AppColors.primary,
+                ),
+                label: item.label,
+              ),
+          ],
         ),
       ),
     );

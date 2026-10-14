@@ -1,0 +1,87 @@
+{
+  "project_info": {
+    "project_number": "755879666931",
+    "project_id": "tokilomobileapp",
+    "storage_bucket": "tokilomobileapp.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:755879666931:android:3bb4c3724a1b4fceac8386",
+        "android_client_info": {
+          "package_name": "com.example.tokilo"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAWizxe6U2iuC6wjbCT3rxSisTSYqd60_c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:755879666931:android:3bb4c3724a1b4fceac8386",
+        "android_client_info": {
+          "package_name": "com.example.tokilo"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "755879666931-fjm7a2c1uinqj31kvvdbuhu844ppbqv6.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAWizxe6U2iuC6wjbCT3rxSisTSYqd60_c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "755879666931-fjm7a2c1uinqj31kvvdbuhu844ppbqv6.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:755879666931:android:78c2054155cf95c8ac8386",
+        "android_client_info": {
+          "package_name": "com.tokilotechnologies.businesshub"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "755879666931-fjm7a2c1uinqj31kvvdbuhu844ppbqv6.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAWizxe6U2iuC6wjbCT3rxSisTSYqd60_c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "755879666931-fjm7a2c1uinqj31kvvdbuhu844ppbqv6.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

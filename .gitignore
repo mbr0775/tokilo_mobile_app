@@ -18,6 +18,20 @@ migrate_working_dir/
 *.iws
 .idea/
 
+.env
+firebase-service-account.json
+
+# Release credentials are local only. Public upload certificates may be committed.
+android/key.properties
+*.jks
+*.keystore
+*.p12
+*.pfx
+.release/
+supabase/.temp/
+
+
+
 # The .vscode folder contains launch configuration and tasks you configure in
 # VS Code which you may wish to be included in version control, so this line
 # is commented out by default.

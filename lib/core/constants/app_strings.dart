@@ -1,7 +1,9 @@
+// lib/core/constants/app_strings.dart
+
 class AppStrings {
   // App
-  static const String appName = 'Tokilo Business Hub';
-  static const String appTagline = 'Your Complete Business Ecosystem';
+  static const String appName = 'Tokilo';
+  static const String appTagline = 'Software projects made simple';
 
   // Auth
   static const String login = 'Login';
@@ -24,17 +26,46 @@ class AppStrings {
   static const String continueWithGoogle = 'Continue with Google';
 
   // Navigation
+  static const String feed = 'Feed';
   static const String home = 'Home';
-  static const String portal = 'Portal';
-  static const String tools = 'Tools';
-  static const String marketplace = 'Marketplace';
+  static const String portal = 'Requests';
+  static const String marketplace = 'Prices';
   static const String profile = 'Profile';
+
+  // Feed
+  static const String feedTitle = 'Tokilo Feed';
+  static const String feedSubtitle =
+      'Projects, news, offers and company updates';
+  static const String feedUploaderName = 'Tokilo';
+  static const String noFeedPosts = 'No Feed Posts Yet';
+  static const String noFeedPostsSubtitle =
+      'When Tokilo uploads projects, news or offers, they will appear here.';
+
+  // Home
+  static const String homeTitle = 'Home';
+
+  // Requests / Portal
+  static const String requestsTitle = 'Requests';
+
+  // Prices / Marketplace
+  static const String pricesTitle = 'Prices';
+
+  // Profile
+  static const String profileTitle = 'Profile';
+
+  // Common
+  static const String refresh = 'Refresh';
+  static const String tryAgain = 'Try Again';
+  static const String loading = 'Loading...';
+  static const String somethingWentWrong =
+      'Something went wrong. Please try again.';
 
   // Validation
   static const String emailRequired = 'Email is required';
   static const String invalidEmail = 'Enter a valid email';
   static const String passwordRequired = 'Password is required';
-  static const String passwordTooShort = 'Password must be at least 6 characters';
+  static const String passwordTooShort =
+      'Password must be at least 6 characters';
   static const String passwordsNotMatch = 'Passwords do not match';
   static const String nameRequired = 'Full name is required';
 }

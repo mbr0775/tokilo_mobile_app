@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+
 import '../../../core/constants/app_colors.dart';
 import '../models/client_project_model.dart';
 
@@ -14,10 +15,19 @@ class PortalScreen extends StatefulWidget {
 }
 
 class _PortalScreenState extends State<PortalScreen> {
-  final _supabase = Supabase.instance.client;
+  final SupabaseClient _supabase = Supabase.instance.client;
 
   List<ClientProjectModel> _projects = [];
   bool _isLoading = true;
+  int _selectedFilter = 0;
+
+  static const List<_StatusFilter> _filters = [
+    _StatusFilter(label: 'All', value: 'all'),
+    _StatusFilter(label: 'Pending', value: 'pending'),
+    _StatusFilter(label: 'Approved', value: 'approved'),
+    _StatusFilter(label: 'Progress', value: 'in_progress'),
+    _StatusFilter(label: 'Done', value: 'completed'),
+  ];
 
   @override
   void initState() {
@@ -25,11 +35,45 @@ class _PortalScreenState extends State<PortalScreen> {
     _loadProjects();
   }
 
+  List<ClientProjectModel> get _filteredProjects {
+    final selected = _filters[_selectedFilter].value;
+
+    if (selected == 'all') {
+      return _projects;
+    }
+
+    return _projects.where((project) => project.status == selected).toList();
+  }
+
+  int get _pendingCount {
+    return _projects.where((project) => project.status == 'pending').length;
+  }
+
+  int get _activeCount {
+    return _projects
+        .where(
+          (project) =>
+              project.status == 'approved' || project.status == 'in_progress',
+        )
+        .length;
+  }
+
+  int get _completedCount {
+    return _projects.where((project) => project.status == 'completed').length;
+  }
+
   Future<void> _loadProjects() async {
     setState(() => _isLoading = true);
+
     try {
       final uid = _supabase.auth.currentUser?.id;
-      if (uid == null) { setState(() => _isLoading = false); return; }
+
+      if (uid == null) {
+        if (mounted) {
+          setState(() => _isLoading = false);
+        }
+        return;
+      }
 
       final data = await _supabase
           .from('client_projects')
@@ -37,29 +81,34 @@ class _PortalScreenState extends State<PortalScreen> {
           .eq('client_id', uid)
           .order('created_at', ascending: false);
 
-      if (mounted) {
-        setState(() {
-          _projects  = (data as List).map((e) => ClientProjectModel.fromMap(e)).toList();
-          _isLoading = false;
-        });
-      }
+      if (!mounted) return;
+
+      setState(() {
+        _projects = (data as List)
+            .map((item) => ClientProjectModel.fromMap(item))
+            .toList();
+        _isLoading = false;
+      });
     } catch (e) {
-      if (mounted) {
-        setState(() => _isLoading = false);
-        _snack('Failed to load projects: $e', error: true);
-      }
+      if (!mounted) return;
+
+      setState(() => _isLoading = false);
+      _snack('Failed to load requests: $e', error: true);
     }
   }
 
-  void _snack(String msg, {bool error = false}) {
+  void _snack(String message, {bool error = false}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      backgroundColor: error ? AppColors.error : AppColors.success,
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      margin: const EdgeInsets.all(16),
-    ));
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: error ? AppColors.error : AppColors.success,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        margin: const EdgeInsets.all(16),
+      ),
+    );
   }
 
   void _openRequestSheet() {
@@ -68,1135 +117,1353 @@ class _PortalScreenState extends State<PortalScreen> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       useSafeArea: true,
-      builder: (_) => _ProjectRequestSheet(
-        onSubmitted: () {
-          _loadProjects();
-          _snack('Project request submitted! We will review it shortly.');
+      builder: (_) {
+        return _ProjectRequestSheet(
+          onSubmitted: () {
+            _loadProjects();
+            _snack('Project request submitted successfully');
+          },
+        );
+      },
+    );
+  }
+
+  void _openDetails(ClientProjectModel project) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) {
+        return _ProjectDetailsSheet(project: project);
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final filtered = _filteredProjects;
+
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _openRequestSheet,
+        backgroundColor: AppColors.primary,
+        elevation: 8,
+        icon: const Icon(Icons.add_rounded, color: Colors.white),
+        label: const Text(
+          'New Request',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+        ),
+      ),
+      body: RefreshIndicator(
+        onRefresh: _loadProjects,
+        color: AppColors.primary,
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverToBoxAdapter(
+              child: _Header(
+                total: _projects.length,
+                pending: _pendingCount,
+                active: _activeCount,
+                completed: _completedCount,
+                onCreate: _openRequestSheet,
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: _FilterBar(
+                filters: _filters,
+                selectedIndex: _selectedFilter,
+                onChanged: (index) {
+                  setState(() => _selectedFilter = index);
+                },
+              ),
+            ),
+            if (_isLoading)
+              const SliverFillRemaining(
+                hasScrollBody: false,
+                child: Center(
+                  child: CircularProgressIndicator(color: AppColors.primary),
+                ),
+              )
+            else if (filtered.isEmpty)
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: _EmptyState(
+                  hasAnyProjects: _projects.isNotEmpty,
+                  onCreate: _openRequestSheet,
+                ),
+              )
+            else
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 110),
+                sliver: SliverList.separated(
+                  itemCount: filtered.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 14),
+                  itemBuilder: (context, index) {
+                    final project = filtered[index];
+
+                    return _ProjectCard(
+                      project: project,
+                      onTap: () => _openDetails(project),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Header extends StatelessWidget {
+  final int total;
+  final int pending;
+  final int active;
+  final int completed;
+  final VoidCallback onCreate;
+
+  const _Header({
+    required this.total,
+    required this.pending,
+    required this.active,
+    required this.completed,
+    required this.onCreate,
+  });
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+    bottom: false,
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Your projects.',
+            style: Theme.of(context).textTheme.headlineLarge,
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'From first idea to the next milestone.',
+            style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: 20),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: onCreate,
+              icon: const Icon(Icons.add_rounded, size: 20),
+              label: const Text('New project request'),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(22),
+            ),
+            child: Row(
+              children: [
+                _MiniStat(value: '$total', label: 'Total'),
+                _MiniStat(value: '$pending', label: 'Pending'),
+                _MiniStat(value: '$active', label: 'Active'),
+                _MiniStat(value: '$completed', label: 'Done'),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _MiniStat extends StatelessWidget {
+  const _MiniStat({required this.value, required this.label});
+  final String value, label;
+  @override
+  Widget build(BuildContext context) => Expanded(
+    child: Column(
+      children: [
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 23,
+            fontWeight: FontWeight.w600,
+            color: AppColors.primary,
+          ),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+        ),
+      ],
+    ),
+  );
+}
+
+class _FilterBar extends StatelessWidget {
+  final List<_StatusFilter> filters;
+  final int selectedIndex;
+  final ValueChanged<int> onChanged;
+
+  const _FilterBar({
+    required this.filters,
+    required this.selectedIndex,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 62,
+      padding: const EdgeInsets.only(top: 14),
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        itemCount: filters.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 9),
+        itemBuilder: (context, index) {
+          final filter = filters[index];
+          final selected = selectedIndex == index;
+
+          return GestureDetector(
+            onTap: () => onChanged(index),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+              decoration: BoxDecoration(
+                color: selected ? AppColors.primary : AppColors.surface,
+                borderRadius: BorderRadius.circular(100),
+                border: Border.all(
+                  color: selected ? AppColors.primary : AppColors.border,
+                ),
+                boxShadow: selected
+                    ? [
+                        BoxShadow(
+                          color: AppColors.primary.withValues(alpha: 0.18),
+                          blurRadius: 12,
+                          offset: const Offset(0, 5),
+                        ),
+                      ]
+                    : [],
+              ),
+              child: Text(
+                filter.label,
+                style: TextStyle(
+                  color: selected ? Colors.white : AppColors.textSecondary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          );
         },
       ),
     );
   }
+}
 
-  void _openProjectDetail(ClientProjectModel project) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      useSafeArea: true,
-      builder: (_) => _ProjectDetailSheet(project: project),
-    );
+class _ProjectCard extends StatelessWidget {
+  final ClientProjectModel project;
+  final VoidCallback onTap;
+
+  const _ProjectCard({required this.project, required this.onTap});
+
+  Color get _statusColor {
+    return Color(int.parse('0xFF${project.statusColorHex}'));
+  }
+
+  IconData get _icon {
+    final title = project.title.toLowerCase();
+
+    if (title.contains('mobile') || title.contains('app')) {
+      return Icons.phone_android_rounded;
+    }
+
+    if (title.contains('web') || title.contains('website')) {
+      return Icons.language_rounded;
+    }
+
+    if (title.contains('maintenance') || title.contains('support')) {
+      return Icons.handyman_rounded;
+    }
+
+    if (title.contains('pos')) {
+      return Icons.point_of_sale_rounded;
+    }
+
+    if (title.contains('crm') || title.contains('erp')) {
+      return Icons.dashboard_customize_rounded;
+    }
+
+    return Icons.code_rounded;
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      appBar: AppBar(
-        title: const Text('My Portal',
-            style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-        backgroundColor: AppColors.surface,
-        elevation: 0,
-        actions: [
-          IconButton(icon: const Icon(Icons.refresh_rounded, color: AppColors.primary), onPressed: _loadProjects),
-          IconButton(
-            icon: const Icon(Icons.add_circle_outline_rounded, color: AppColors.primary),
-            onPressed: _openRequestSheet,
-            tooltip: 'Request a Project',
-          ),
-        ],
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
-          : RefreshIndicator(
-              onRefresh: _loadProjects,
-              color: AppColors.primary,
-              child: _projects.isEmpty
-                  ? _buildEmptyState()
-                  : ListView(
-                      padding: const EdgeInsets.all(20),
-                      children: [
-                        _buildSummaryHeader(),
-                        const SizedBox(height: 20),
-                        ..._projects.map((p) => _buildProjectCard(p)),
-                      ],
-                    ),
-            ),
-      floatingActionButton: _projects.isEmpty
-          ? null
-          : FloatingActionButton.extended(
-              onPressed: _openRequestSheet,
-              backgroundColor: AppColors.primary,
-              icon: const Icon(Icons.add_rounded, color: Colors.white),
-              label: const Text('New Request',
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-            ),
-    );
-  }
+    final color = _statusColor;
+    final progress = project.progress.clamp(0, 100) / 100;
 
-  Widget _buildSummaryHeader() {
-    final total     = _projects.length;
-    final pending   = _projects.where((p) => p.status == 'pending').length;
-    final active    = _projects.where((p) => p.status == 'in_progress' || p.status == 'approved').length;
-    final completed = _projects.where((p) => p.status == 'completed').length;
-
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        gradient: AppColors.primaryGradient,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [BoxShadow(color: AppColors.primary.withOpacity(0.3), blurRadius: 16, offset: const Offset(0, 6))],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            const Icon(Icons.folder_special_rounded, color: Colors.white, size: 22),
-            const SizedBox(width: 8),
-            Text('$total Project${total == 1 ? '' : 's'}',
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-          ]),
-          const SizedBox(height: 14),
-          Row(children: [
-            _statChip('$pending Pending', 'F59E0B'),
-            const SizedBox(width: 8),
-            _statChip('$active Active', '3B82F6'),
-            const SizedBox(width: 8),
-            _statChip('$completed Done', '10B981'),
-          ]),
-        ],
-      ),
-    );
-  }
-
-  Widget _statChip(String label, String hex) {
-    final color = Color(int.parse('0xFF$hex'));
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.2),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.4)),
-      ),
-      child: Text(label, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w700)),
-    );
-  }
-
-  Widget _buildProjectCard(ClientProjectModel p) {
-    final statusColor = Color(int.parse('0xFF${p.statusColorHex}'));
     return GestureDetector(
-      onTap: () => _openProjectDetail(p),
+      onTap: onTap,
       child: Container(
-        margin: const EdgeInsets.only(bottom: 14),
-        padding: const EdgeInsets.all(18),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: AppColors.surface,
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(24),
           border: Border.all(color: AppColors.border),
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10, offset: const Offset(0, 4))],
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 16,
+              offset: const Offset(0, 7),
+            ),
+          ],
         ),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(children: [
-              Expanded(child: Text(p.title,
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppColors.textPrimary),
-                  maxLines: 1, overflow: TextOverflow.ellipsis)),
-              const SizedBox(width: 8),
-              _statusBadge(p.statusLabel, statusColor),
-            ]),
-            const SizedBox(height: 6),
-            Text(p.requestTypeLabel,
-                style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-            if (p.description != null && p.description!.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Text(p.description!,
-                  style: const TextStyle(fontSize: 12, color: AppColors.textSecondary, height: 1.4),
-                  maxLines: 2, overflow: TextOverflow.ellipsis),
-            ],
-            const SizedBox(height: 14),
-            Row(children: [
-              Expanded(child: ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: LinearProgressIndicator(
-                  value: p.progress / 100,
-                  backgroundColor: AppColors.border,
-                  color: statusColor,
-                  minHeight: 6,
+            Row(
+              children: [
+                Container(
+                  width: 54,
+                  height: 54,
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: Icon(_icon, color: color, size: 27),
                 ),
-              )),
-              const SizedBox(width: 10),
-              Text('${p.progress}%',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: statusColor)),
-            ]),
-            if ((p.adminNotes != null && p.adminNotes!.isNotEmpty) || p.invoiceUrl != null) ...[
-              const SizedBox(height: 12),
-              Row(children: [
-                if (p.adminNotes != null && p.adminNotes!.isNotEmpty)
-                  _iconTag(Icons.message_rounded, 'Note from Tokilo', AppColors.accent),
-                if (p.invoiceUrl != null) ...[
-                  const SizedBox(width: 8),
-                  _iconTag(Icons.receipt_long_rounded, p.invoiceLabel ?? 'Invoice', AppColors.primary),
-                ],
-              ]),
+                const SizedBox(width: 13),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        project.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: AppColors.textPrimary,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      Row(
+                        children: [
+                          _StatusBadge(
+                            label: project.statusLabel,
+                            color: color,
+                          ),
+                          const SizedBox(width: 7),
+                          Text(
+                            _dateLabel(project.createdAt),
+                            style: const TextStyle(
+                              color: AppColors.textHint,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(
+                  Icons.arrow_forward_ios_rounded,
+                  size: 15,
+                  color: AppColors.textHint,
+                ),
+              ],
+            ),
+            if (project.description != null &&
+                project.description!.trim().isNotEmpty) ...[
+              const SizedBox(height: 14),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  project.description!,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 12.5,
+                    height: 1.45,
+                  ),
+                ),
+              ),
             ],
-            const SizedBox(height: 10),
-            Text('Submitted ${_formatDate(p.createdAt)}',
-                style: const TextStyle(fontSize: 11, color: AppColors.textHint)),
+            const SizedBox(height: 16),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(100),
+              child: LinearProgressIndicator(
+                value: progress,
+                minHeight: 8,
+                backgroundColor: AppColors.border,
+                color: color,
+              ),
+            ),
+            const SizedBox(height: 9),
+            Row(
+              children: [
+                Text(
+                  '${project.progress}% complete',
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const Spacer(),
+                if (project.adminNotes != null &&
+                    project.adminNotes!.trim().isNotEmpty) ...[
+                  Icon(Icons.mark_chat_unread_rounded, size: 15, color: color),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Team update',
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _statusBadge(String label, Color color) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-    decoration: BoxDecoration(
-      color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(8),
-      border: Border.all(color: color.withOpacity(0.3)),
-    ),
-    child: Text(label, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w700)),
-  );
+  String _dateLabel(DateTime date) {
+    final now = DateTime.now();
+    final diff = now.difference(date);
 
-  Widget _iconTag(IconData icon, String label, Color color) => Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Icon(icon, size: 12, color: color), const SizedBox(width: 4),
-      Text(label, style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600)),
-    ],
-  );
+    if (diff.inDays == 0) return 'Today';
+    if (diff.inDays == 1) return 'Yesterday';
+    if (diff.inDays < 7) return '${diff.inDays} days ago';
 
-  Widget _buildEmptyState() {
-    return SingleChildScrollView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(children: [
-          const SizedBox(height: 40),
-          Container(
-            width: 110, height: 110,
-            decoration: BoxDecoration(color: AppColors.primary.withOpacity(0.07), shape: BoxShape.circle),
-            child: Icon(Icons.folder_open_rounded, size: 54, color: AppColors.primary.withOpacity(0.4)),
-          ),
-          const SizedBox(height: 24),
-          const Text('No Projects Yet',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-          const SizedBox(height: 10),
-          const Text(
-            'Submit your first project request and track it right here. We\'ll review and update you every step of the way.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: AppColors.textSecondary, fontSize: 13, height: 1.6),
-          ),
-          const SizedBox(height: 32),
-          ElevatedButton.icon(
-            onPressed: _openRequestSheet,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            ),
-            icon: const Icon(Icons.add_rounded, color: Colors.white),
-            label: const Text('Request a Project',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15)),
-          ),
-          const SizedBox(height: 20),
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(gradient: AppColors.primaryGradient, borderRadius: BorderRadius.circular(16)),
-            child: const Row(children: [
-              Icon(Icons.chat_bubble_rounded, color: Colors.white, size: 28),
-              SizedBox(width: 12),
-              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('Chat with Tokilo Team',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
-                SizedBox(height: 2),
-                Text('Get real-time support from our experts',
-                    style: TextStyle(color: Colors.white70, fontSize: 11)),
-              ])),
-              Icon(Icons.arrow_forward_ios_rounded, color: Colors.white70, size: 14),
-            ]),
-          ),
-        ]),
-      ),
-    );
-  }
-
-  String _formatDate(DateTime d) {
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    return '${d.day} ${months[d.month - 1]} ${d.year}';
+    return '${date.day}/${date.month}/${date.year}';
   }
 }
 
-// ══════════════════════════════════════════════════════════════
-// PROJECT DETAIL SHEET
-// ══════════════════════════════════════════════════════════════
-class _ProjectDetailSheet extends StatelessWidget {
-  final ClientProjectModel project;
-  const _ProjectDetailSheet({required this.project});
+class _StatusBadge extends StatelessWidget {
+  final String label;
+  final Color color;
+
+  const _StatusBadge({required this.label, required this.color});
 
   @override
   Widget build(BuildContext context) {
-    final statusColor = Color(int.parse('0xFF${project.statusColorHex}'));
     return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      padding: EdgeInsets.fromLTRB(24, 16, 24, MediaQuery.of(context).viewInsets.bottom + 32),
-      child: SingleChildScrollView(
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-          Center(child: Container(width: 40, height: 4,
-              decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)))),
-          const SizedBox(height: 16),
-          Row(children: [
-            Expanded(child: Text(project.title,
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.textPrimary))),
-            _badge(project.statusLabel, statusColor),
-          ]),
-          const SizedBox(height: 4),
-          Text(project.requestTypeLabel,
-              style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
-          const SizedBox(height: 20),
-          _sectionLabel('Progress'),
-          const SizedBox(height: 8),
-          Row(children: [
-            Expanded(child: ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: LinearProgressIndicator(
-                value: project.progress / 100, backgroundColor: Colors.grey.shade200,
-                color: statusColor, minHeight: 10),
-            )),
-            const SizedBox(width: 12),
-            Text('${project.progress}%',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: statusColor)),
-          ]),
-          const SizedBox(height: 20),
-          if (project.description != null && project.description!.isNotEmpty) ...[
-            _sectionLabel('Description'), const SizedBox(height: 8),
-            Text(project.description!,
-                style: const TextStyle(fontSize: 13, color: AppColors.textSecondary, height: 1.5)),
-            const SizedBox(height: 20),
-          ],
-          if (project.adminNotes != null && project.adminNotes!.isNotEmpty) ...[
-            _sectionLabel('Message from Tokilo'), const SizedBox(height: 8),
-            Container(
-              width: double.infinity, padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppColors.accent.withOpacity(0.06), borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: AppColors.accent.withOpacity(0.25))),
-              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Icon(Icons.support_agent_rounded, color: AppColors.accent, size: 20),
-                const SizedBox(width: 10),
-                Expanded(child: Text(project.adminNotes!,
-                    style: const TextStyle(fontSize: 13, color: AppColors.textPrimary, height: 1.5))),
-              ]),
-            ),
-            const SizedBox(height: 20),
-          ],
-          if (project.invoiceUrl != null) ...[
-            _sectionLabel('Invoice & Documents'), const SizedBox(height: 8),
-            GestureDetector(
-              onTap: () async {
-                final uri = Uri.tryParse(project.invoiceUrl!);
-                if (uri != null && await canLaunchUrl(uri)) launchUrl(uri);
-              },
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withOpacity(0.06), borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: AppColors.primary.withOpacity(0.25))),
-                child: Row(children: [
-                  const Icon(Icons.receipt_long_rounded, color: AppColors.primary, size: 24),
-                  const SizedBox(width: 12),
-                  Expanded(child: Text(project.invoiceLabel ?? 'View Invoice',
-                      style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.w600, fontSize: 14))),
-                  const Icon(Icons.open_in_new_rounded, color: AppColors.primary, size: 16),
-                ]),
-              ),
-            ),
-            const SizedBox(height: 20),
-          ],
-          _sectionLabel('Timeline'), const SizedBox(height: 10),
-          _timelineRow(Icons.send_rounded, 'Submitted', _fmtDate(project.createdAt), AppColors.textSecondary),
-          if (project.status != 'pending')
-            _timelineRow(Icons.check_circle_rounded, 'Status Updated', _fmtDate(project.updatedAt), statusColor),
-          const SizedBox(height: 28),
-        ]),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(100),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 10.5,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
+}
 
-  Widget _sectionLabel(String label) => Text(label,
-      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textPrimary));
+class _EmptyState extends StatelessWidget {
+  final bool hasAnyProjects;
+  final VoidCallback onCreate;
 
-  Widget _badge(String label, Color color) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-    decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withOpacity(0.3))),
-    child: Text(label, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w700)),
-  );
+  const _EmptyState({required this.hasAnyProjects, required this.onCreate});
 
-  Widget _timelineRow(IconData icon, String label, String date, Color color) => Padding(
-    padding: const EdgeInsets.only(bottom: 10),
-    child: Row(children: [
-      Icon(icon, size: 16, color: color), const SizedBox(width: 10),
-      Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: AppColors.textPrimary)),
-      const Spacer(),
-      Text(date, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-    ]),
-  );
-
-  String _fmtDate(DateTime d) {
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    return '${d.day} ${months[d.month - 1]} ${d.year}';
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(28),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 86,
+            height: 86,
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.08),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.assignment_outlined,
+              color: AppColors.primary,
+              size: 42,
+            ),
+          ),
+          const SizedBox(height: 18),
+          Text(
+            hasAnyProjects ? 'No requests in this filter' : 'No requests yet',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: AppColors.textPrimary,
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            hasAnyProjects
+                ? 'Try another status filter to view your project requests.'
+                : 'Submit your first project request and track progress here.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 13,
+              height: 1.45,
+            ),
+          ),
+          if (!hasAnyProjects) ...[
+            const SizedBox(height: 22),
+            GestureDetector(
+              onTap: onCreate,
+              child: Container(
+                height: 50,
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                decoration: BoxDecoration(
+                  gradient: AppColors.primaryGradient,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.primary.withValues(alpha: 0.25),
+                      blurRadius: 14,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: const Center(
+                  child: Text(
+                    'Create Request',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 }
 
-// ══════════════════════════════════════════════════════════════
-// PROJECT REQUEST SHEET
-// ══════════════════════════════════════════════════════════════
 class _ProjectRequestSheet extends StatefulWidget {
   final VoidCallback onSubmitted;
+
   const _ProjectRequestSheet({required this.onSubmitted});
 
   @override
   State<_ProjectRequestSheet> createState() => _ProjectRequestSheetState();
 }
 
-class _ProjectRequestSheetState extends State<_ProjectRequestSheet>
-    with SingleTickerProviderStateMixin {
-  late TabController _tab;
-  final _supabase = Supabase.instance.client;
+class _ProjectRequestSheetState extends State<_ProjectRequestSheet> {
+  final SupabaseClient _supabase = Supabase.instance.client;
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
 
-  // Services tab
-  List<Map<String, dynamic>> _services = [];
-  Map<String, dynamic>? _selectedService;
-  String? _selectedServiceCategory; // NEW: tracks which category was tapped
+  final TextEditingController _titleCtrl = TextEditingController();
+  final TextEditingController _descCtrl = TextEditingController();
+  final TextEditingController _notesCtrl = TextEditingController();
+  final TextEditingController _budgetCtrl = TextEditingController();
 
-  // Products tab
-  List<Map<String, dynamic>> _products = [];
-  Map<String, dynamic>? _selectedProduct;
+  int _selectedCategory = 0;
+  bool _isSubmitting = false;
 
-  // Custom tab
-  final _titleCtrl = TextEditingController();
-  final _descCtrl  = TextEditingController();
-  final _notesCtrl = TextEditingController();
-  String? _selectedCategory;
-
-  static const List<String> _categories = [
-    'Software Development',
-    'Retail Technology',
-    'IT Infrastructure',
-    'Cyber Security',
-    'Physical Security',
-    'Cloud & DevOps',
-    'AI & Automation',
+  static const List<_RequestCategory> _categories = [
+    _RequestCategory(
+      title: 'Website',
+      value: 'website',
+      icon: Icons.language_rounded,
+      color: Color(0xFF06768D),
+    ),
+    _RequestCategory(
+      title: 'Mobile App',
+      value: 'mobile_app',
+      icon: Icons.phone_android_rounded,
+      color: Color(0xFF10B981),
+    ),
+    _RequestCategory(
+      title: 'CRM / ERP',
+      value: 'crm_erp',
+      icon: Icons.dashboard_customize_rounded,
+      color: Color(0xFF8B5CF6),
+    ),
+    _RequestCategory(
+      title: 'POS',
+      value: 'pos',
+      icon: Icons.point_of_sale_rounded,
+      color: Color(0xFFF59E0B),
+    ),
+    _RequestCategory(
+      title: 'Maintenance',
+      value: 'maintenance',
+      icon: Icons.handyman_rounded,
+      color: Color(0xFFEF4444),
+    ),
+    _RequestCategory(
+      title: 'Custom',
+      value: 'custom',
+      icon: Icons.auto_awesome_rounded,
+      color: Color(0xFF3B82F6),
+    ),
   ];
-
-  static const List<IconData> _categoryIcons = [
-    Icons.code_rounded,
-    Icons.storefront_rounded,
-    Icons.router_rounded,
-    Icons.security_rounded,
-    Icons.videocam_rounded,
-    Icons.cloud_rounded,
-    Icons.smart_toy_rounded,
-  ];
-
-  static const List<String> _categoryColorHex = [
-    '6366F1',
-    '0EA5E9',
-    '06768D',
-    'EF4444',
-    '8B5CF6',
-    '10B981',
-    'F59E0B',
-  ];
-
-  // Shared
-  final _notesForServiceCtrl = TextEditingController();
-  final _notesForProductCtrl = TextEditingController();
-  bool _isSaving  = false;
-  bool _isLoading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _tab = TabController(length: 3, vsync: this);
-
-    // Reset service category selection when switching away from Services tab
-    _tab.addListener(() {
-      if (_tab.index != 0) {
-        setState(() {
-          _selectedServiceCategory = null;
-          _selectedService = null;
-        });
-      }
-    });
-
-    _loadData();
-  }
 
   @override
   void dispose() {
-    _tab.dispose();
     _titleCtrl.dispose();
     _descCtrl.dispose();
     _notesCtrl.dispose();
-    _notesForServiceCtrl.dispose();
-    _notesForProductCtrl.dispose();
+    _budgetCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _loadData() async {
-    try {
-      final svc = await _supabase
-          .from('services')
-          .select('id,title,description,category,price_label,duration')
-          .eq('is_active', true)
-          .order('title');
-      final prd = await _supabase
-          .from('it_products')
-          .select('id,name,description,category,price')
-          .eq('is_active', true)
-          .order('name');
-      if (mounted) {
-        setState(() {
-          _services  = List<Map<String, dynamic>>.from(svc);
-          _products  = List<Map<String, dynamic>>.from(prd);
-          _isLoading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
   Future<void> _submit() async {
-    final user = _supabase.auth.currentUser;
-    if (user == null) return;
-    final name = user.userMetadata?['full_name'] as String?;
+    if (!_formKey.currentState!.validate()) return;
 
-    Map<String, dynamic> payload;
+    setState(() => _isSubmitting = true);
 
-    switch (_tab.index) {
-      case 0:
-        if (_selectedService == null) { _snack('Please select a service', error: true); return; }
-        payload = {
-          'client_id': user.id, 'client_email': user.email, 'client_name': name,
-          'request_type': 'service', 'service_id': _selectedService!['id'],
-          'title': _selectedService!['title'], 'description': _selectedService!['description'],
-          'custom_notes': _notesForServiceCtrl.text.trim().isEmpty ? null : _notesForServiceCtrl.text.trim(),
-          'status': 'pending', 'progress': 0,
-        };
-        break;
-
-      case 1:
-        if (_selectedProduct == null) { _snack('Please select a product', error: true); return; }
-        payload = {
-          'client_id': user.id, 'client_email': user.email, 'client_name': name,
-          'request_type': 'product', 'product_id': _selectedProduct!['id'],
-          'title': _selectedProduct!['name'], 'description': _selectedProduct!['description'],
-          'custom_notes': _notesForProductCtrl.text.trim().isEmpty ? null : _notesForProductCtrl.text.trim(),
-          'status': 'pending', 'progress': 0,
-        };
-        break;
-
-      default:
-        if (_titleCtrl.text.trim().isEmpty) { _snack('Please enter a project title', error: true); return; }
-        payload = {
-          'client_id': user.id, 'client_email': user.email, 'client_name': name,
-          'request_type': 'custom',
-          'title': _titleCtrl.text.trim(),
-          'category': _selectedCategory,
-          'description': _descCtrl.text.trim().isEmpty ? null : _descCtrl.text.trim(),
-          'custom_notes': _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
-          'status': 'pending', 'progress': 0,
-        };
-    }
-
-    setState(() => _isSaving = true);
     try {
-      await _supabase.from('client_projects').insert(payload);
-      widget.onSubmitted();
-      if (mounted) Navigator.pop(context);
-    } catch (e) {
-      _snack('Submit failed: $e', error: true);
-    } finally {
-      if (mounted) setState(() => _isSaving = false);
-    }
-  }
+      final user = _supabase.auth.currentUser;
+      final uid = user?.id;
+      final email = user?.email ?? '';
+      final meta = user?.userMetadata;
+      final name = meta?['full_name'] ?? email;
 
-  void _snack(String msg, {bool error = false}) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      backgroundColor: error ? AppColors.error : AppColors.success,
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      margin: const EdgeInsets.all(16),
-    ));
+      if (uid == null) {
+        throw Exception('User not logged in');
+      }
+
+      final category = _categories[_selectedCategory];
+
+      final notes = [
+        'Category: ${category.title}',
+        if (_budgetCtrl.text.trim().isNotEmpty)
+          'Budget: ${_budgetCtrl.text.trim()}',
+        if (_notesCtrl.text.trim().isNotEmpty)
+          'Notes: ${_notesCtrl.text.trim()}',
+      ].join('\n');
+
+      await _supabase.from('client_projects').insert({
+        'client_id': uid,
+        'client_email': email,
+        'client_name': name,
+        'request_type': category.value,
+        'title': _titleCtrl.text.trim(),
+        'description': _descCtrl.text.trim(),
+        'custom_notes': notes,
+        'status': 'pending',
+        'progress': 0,
+        'created_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toIso8601String(),
+      });
+
+      widget.onSubmitted();
+
+      if (mounted) {
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Submit failed: $e'),
+          backgroundColor: AppColors.error,
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(16),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final keyboardH = MediaQuery.of(context).viewInsets.bottom;
-    final screenH   = MediaQuery.of(context).size.height;
+    final bottomSafe = MediaQuery.of(context).viewPadding.bottom;
+    final keyboardBottom = MediaQuery.of(context).viewInsets.bottom;
+    final screenHeight = MediaQuery.of(context).size.height;
 
-    return Padding(
-      padding: EdgeInsets.only(bottom: keyboardH),
-      child: Container(
-        constraints: BoxConstraints(maxHeight: screenH * 0.92),
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 12),
-            Center(child: Container(width: 40, height: 4,
-                decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(2)))),
-            const SizedBox(height: 14),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Row(children: [
-                const Text('Request a Project',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-                const Spacer(),
-                IconButton(onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close_rounded, color: AppColors.textHint)),
-              ]),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Container(
-                decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(12)),
-                child: TabBar(
-                  controller: _tab,
-                  indicator: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(10)),
-                  labelColor: Colors.white,
-                  unselectedLabelColor: AppColors.textSecondary,
-                  labelStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-                  dividerColor: Colors.transparent,
-                  indicatorSize: TabBarIndicatorSize.tab,
-                  tabs: const [Tab(text: 'Services'), Tab(text: 'Products'), Tab(text: 'Custom')],
-                ),
-              ),
-            ),
-            const SizedBox(height: 4),
-
-            Flexible(
-              child: _isLoading
-                  ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
-                  : TabBarView(
-                      controller: _tab,
-                      children: [
-                        _buildServicesTab(),
-                        _buildProductsTab(),
-                        _buildCustomTab(),
-                      ],
-                    ),
-            ),
-
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
-              child: GestureDetector(
-                onTap: _isSaving ? null : _submit,
-                child: Container(
-                  height: 54,
-                  decoration: BoxDecoration(
-                    gradient: _isSaving
-                        ? LinearGradient(colors: [AppColors.primary.withOpacity(0.5), AppColors.accent.withOpacity(0.5)])
-                        : AppColors.primaryGradient,
-                    borderRadius: BorderRadius.circular(14),
-                    boxShadow: _isSaving ? [] : [BoxShadow(color: AppColors.primary.withOpacity(0.3), blurRadius: 12, offset: const Offset(0, 4))],
-                  ),
-                  child: Center(
-                    child: _isSaving
-                        ? const Row(mainAxisSize: MainAxisSize.min, children: [
-                            SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)),
-                            SizedBox(width: 10),
-                            Text('Submitting...', style: TextStyle(color: Colors.white, fontSize: 15)),
-                          ])
-                        : const Text('Submit Request',
-                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 16)),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
+    return Container(
+      constraints: BoxConstraints(maxHeight: screenHeight * 0.92),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
       ),
-    );
-  }
-
-  // ══════════════════════════════════════════════════════════════
-  // SERVICES TAB — Step 1: category grid, Step 2: filtered list
-  // ══════════════════════════════════════════════════════════════
-  Widget _buildServicesTab() {
-    // Step 1: No category selected yet → show 7 division tiles
-    if (_selectedServiceCategory == null) {
-      return GridView.builder(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
-          childAspectRatio: 1.45,
+      child: SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(
+          20,
+          14,
+          20,
+          keyboardBottom + bottomSafe + 30,
         ),
-        itemCount: _categories.length,
-        itemBuilder: (context, i) {
-          final color = Color(int.parse('0xFF${_categoryColorHex[i]}'));
-          return GestureDetector(
-            onTap: () => setState(() => _selectedServiceCategory = _categories[i]),
-            child: Container(
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.07),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: color.withOpacity(0.25), width: 1.5),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            children: [
+              Container(
+                width: 42,
+                height: 5,
+                decoration: BoxDecoration(
+                  color: AppColors.border,
+                  borderRadius: BorderRadius.circular(100),
+                ),
               ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+              const SizedBox(height: 22),
+              Row(
                 children: [
-                  Container(
-                    width: 44, height: 44,
-                    decoration: BoxDecoration(
-                      color: color.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Icon(_categoryIcons[i], color: color, size: 22),
-                  ),
-                  const SizedBox(height: 10),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                  const Expanded(
                     child: Text(
-                      _categories[i],
-                      textAlign: TextAlign.center,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
+                      'New Project Request',
                       style: TextStyle(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w700,
-                        color: color,
+                        color: AppColors.textPrimary,
+                        fontSize: 24,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: -0.4,
                       ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(
+                      Icons.close_rounded,
+                      color: AppColors.textHint,
+                      size: 28,
                     ),
                   ),
                 ],
               ),
-            ),
-          );
-        },
-      );
-    }
-
-    // Step 2: Category chosen → show back button + filtered services
-    final catIndex = _categories.indexOf(_selectedServiceCategory!);
-    final color    = catIndex >= 0
-        ? Color(int.parse('0xFF${_categoryColorHex[catIndex]}'))
-        : AppColors.primary;
-    final icon     = catIndex >= 0 ? _categoryIcons[catIndex] : Icons.design_services_rounded;
-
-    final filtered = _services
-        .where((s) => (s['category'] ?? '') == _selectedServiceCategory)
-        .toList();
-
-    return Column(
-      children: [
-        // ── Back + category header ──────────────────────────
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
-          child: Row(
-            children: [
-              GestureDetector(
-                onTap: () => setState(() {
-                  _selectedServiceCategory = null;
-                  _selectedService = null;
-                }),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: AppColors.background,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: AppColors.border),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.arrow_back_ios_rounded, size: 12, color: AppColors.textSecondary),
-                      SizedBox(width: 4),
-                      Text('Back', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Container(
-                width: 28, height: 28,
-                decoration: BoxDecoration(
-                  color: color.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(icon, color: color, size: 15),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
+              const SizedBox(height: 8),
+              const Align(
+                alignment: Alignment.centerLeft,
                 child: Text(
-                  _selectedServiceCategory!,
+                  'Choose what you want to build or maintain.',
                   style: TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w700, color: color),
-                  overflow: TextOverflow.ellipsis,
+                    color: AppColors.textSecondary,
+                    fontSize: 13,
+                    height: 1.45,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 22),
+              _CategorySelector(
+                categories: _categories,
+                selectedIndex: _selectedCategory,
+                onChanged: (index) {
+                  setState(() => _selectedCategory = index);
+                },
+              ),
+              const SizedBox(height: 22),
+              _InputField(
+                label: 'Project Title *',
+                controller: _titleCtrl,
+                hint: 'e.g. Restaurant Ordering App',
+                icon: Icons.title_rounded,
+                required: true,
+              ),
+              const SizedBox(height: 16),
+              _InputField(
+                label: 'Project Details *',
+                controller: _descCtrl,
+                hint: 'Describe your idea, features, users and goal...',
+                icon: Icons.notes_rounded,
+                required: true,
+                maxLines: 4,
+              ),
+              const SizedBox(height: 16),
+              _InputField(
+                label: 'Budget / Price Range',
+                controller: _budgetCtrl,
+                hint: 'e.g. QAR 5,000 - 10,000',
+                icon: Icons.payments_rounded,
+              ),
+              const SizedBox(height: 16),
+              _InputField(
+                label: 'Additional Notes',
+                controller: _notesCtrl,
+                hint: 'Timeline, reference app, special requests...',
+                icon: Icons.edit_note_rounded,
+                maxLines: 3,
+              ),
+              const SizedBox(height: 24),
+              GestureDetector(
+                onTap: _isSubmitting ? null : _submit,
+                child: Container(
+                  height: 56,
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    gradient: _isSubmitting
+                        ? LinearGradient(
+                            colors: [
+                              AppColors.primary.withValues(alpha: 0.55),
+                              AppColors.accent.withValues(alpha: 0.55),
+                            ],
+                          )
+                        : AppColors.primaryGradient,
+                    borderRadius: BorderRadius.circular(18),
+                    boxShadow: _isSubmitting
+                        ? []
+                        : [
+                            BoxShadow(
+                              color: AppColors.primary.withValues(alpha: 0.25),
+                              blurRadius: 14,
+                              offset: const Offset(0, 6),
+                            ),
+                          ],
+                  ),
+                  child: Center(
+                    child: _isSubmitting
+                        ? const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  color: Colors.white,
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                              SizedBox(width: 10),
+                              Text(
+                                'Submitting...',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          )
+                        : const Text(
+                            'Submit Request',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 16,
+                            ),
+                          ),
+                  ),
                 ),
               ),
             ],
           ),
         ),
-        Divider(height: 1, color: AppColors.border),
+      ),
+    );
+  }
+}
 
-        // ── Services list or empty state ────────────────────
-        Expanded(
-          child: filtered.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.inbox_rounded,
-                          size: 48, color: AppColors.textHint.withOpacity(0.35)),
-                      const SizedBox(height: 12),
-                      const Text('No services in this category',
-                          style: TextStyle(
-                              color: AppColors.textSecondary, fontSize: 13)),
-                    ],
+class _CategorySelector extends StatelessWidget {
+  final List<_RequestCategory> categories;
+  final int selectedIndex;
+  final ValueChanged<int> onChanged;
+
+  const _CategorySelector({
+    required this.categories,
+    required this.selectedIndex,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GridView.builder(
+      itemCount: categories.length,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        mainAxisSpacing: 10,
+        crossAxisSpacing: 10,
+        childAspectRatio: 0.95,
+      ),
+      itemBuilder: (context, index) {
+        final item = categories[index];
+        final selected = selectedIndex == index;
+
+        return GestureDetector(
+          onTap: () => onChanged(index),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: selected
+                  ? item.color.withValues(alpha: 0.10)
+                  : AppColors.background,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                color: selected ? item.color : AppColors.border,
+                width: selected ? 1.5 : 1,
+              ),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: item.color.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(14),
                   ),
-                )
-              : ListView(
-                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
-                  children: [
-                    ...filtered.map((s) {
-                      final selected = _selectedService?['id'] == s['id'];
-                      return GestureDetector(
-                        onTap: () =>
-                            setState(() => _selectedService = selected ? null : s),
-                        child: Container(
-                          margin: const EdgeInsets.only(bottom: 10),
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: selected
-                                ? color.withOpacity(0.06)
-                                : AppColors.background,
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(
-                                color: selected ? color : AppColors.border,
-                                width: selected ? 1.5 : 1),
-                          ),
-                          child: Row(children: [
-                            Container(
-                              width: 40, height: 40,
-                              decoration: BoxDecoration(
-                                  color: color.withOpacity(0.1),
-                                  borderRadius: BorderRadius.circular(10)),
-                              child: Icon(icon, color: color, size: 20),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(s['title'] ?? '',
-                                      style: const TextStyle(
-                                          fontWeight: FontWeight.w600,
-                                          fontSize: 13,
-                                          color: AppColors.textPrimary)),
-                                  if ((s['price_label'] ?? '').isNotEmpty) ...[
-                                    const SizedBox(height: 3),
-                                    Text(s['price_label'],
-                                        style: TextStyle(
-                                            fontSize: 11,
-                                            color: color,
-                                            fontWeight: FontWeight.w600)),
-                                  ],
-                                  if ((s['duration'] ?? '').isNotEmpty) ...[
-                                    const SizedBox(height: 3),
-                                    Row(children: [
-                                      const Icon(Icons.schedule_rounded,
-                                          size: 10,
-                                          color: AppColors.textSecondary),
-                                      const SizedBox(width: 3),
-                                      Text(s['duration'],
-                                          style: const TextStyle(
-                                              fontSize: 10,
-                                              color: AppColors.textSecondary)),
-                                    ]),
-                                  ],
-                                ],
-                              ),
-                            ),
-                            if (selected)
-                              Icon(Icons.check_circle_rounded,
-                                  color: color, size: 22),
-                          ]),
-                        ),
-                      );
-                    }),
-                    if (_selectedService != null) ...[
-                      const SizedBox(height: 8),
-                      TextField(
-                        controller: _notesForServiceCtrl,
-                        maxLines: 2,
-                        decoration: InputDecoration(
-                          hintText:
-                              'Any additional notes or requirements... (optional)',
-                          filled: true,
-                          fillColor: AppColors.background,
-                          border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(color: AppColors.border)),
-                          enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(color: AppColors.border)),
-                          contentPadding: const EdgeInsets.all(12),
-                        ),
-                      ),
-                    ],
-                  ],
+                  child: Icon(item.icon, color: item.color, size: 22),
                 ),
+                const SizedBox(height: 9),
+                Text(
+                  item.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: selected ? item.color : AppColors.textSecondary,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    height: 1.15,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _InputField extends StatelessWidget {
+  final String label;
+  final TextEditingController controller;
+  final String hint;
+  final IconData icon;
+  final bool required;
+  final int maxLines;
+
+  const _InputField({
+    required this.label,
+    required this.controller,
+    required this.hint,
+    required this.icon,
+    this.required = false,
+    this.maxLines = 1,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            color: AppColors.textPrimary,
+            fontSize: 13.5,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 9),
+        TextFormField(
+          controller: controller,
+          maxLines: maxLines,
+          validator: required
+              ? (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return '$label is required';
+                  }
+
+                  return null;
+                }
+              : null,
+          decoration: InputDecoration(
+            hintText: hint,
+            prefixIcon: Padding(
+              padding: EdgeInsets.only(bottom: maxLines > 1 ? 72 : 0),
+              child: Icon(icon, color: AppColors.textHint, size: 22),
+            ),
+            filled: true,
+            fillColor: Colors.white,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 18,
+            ),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(18),
+              borderSide: const BorderSide(color: AppColors.border),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(18),
+              borderSide: const BorderSide(color: AppColors.border),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(18),
+              borderSide: const BorderSide(
+                color: AppColors.primary,
+                width: 1.5,
+              ),
+            ),
+          ),
         ),
       ],
     );
   }
+}
 
-  // ══════════════════════════════════════════════════════════════
-  // PRODUCTS TAB (unchanged)
-  // ══════════════════════════════════════════════════════════════
-  Widget _buildProductsTab() {
-    if (_products.isEmpty) {
-      return const Center(
-          child: Text('No products available',
-              style: TextStyle(color: AppColors.textSecondary)));
-    }
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
-      children: [
-        ..._products.map((p) {
-          final selected = _selectedProduct?['id'] == p['id'];
-          return GestureDetector(
-            onTap: () => setState(() => _selectedProduct = selected ? null : p),
-            child: Container(
-              margin: const EdgeInsets.only(bottom: 10),
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: selected
-                    ? const Color(0xFF8B5CF6).withOpacity(0.06)
-                    : AppColors.background,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                    color: selected
-                        ? const Color(0xFF8B5CF6)
-                        : AppColors.border,
-                    width: selected ? 1.5 : 1),
-              ),
-              child: Row(children: [
-                Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                        color: const Color(0xFF8B5CF6).withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(10)),
-                    child: const Icon(Icons.devices_rounded,
-                        color: Color(0xFF8B5CF6), size: 20)),
-                const SizedBox(width: 12),
-                Expanded(
-                    child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                      Text(p['name'] ?? '',
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 13,
-                              color: AppColors.textPrimary)),
-                      if ((p['category'] ?? '').isNotEmpty)
-                        Text(p['category'],
-                            style: const TextStyle(
-                                fontSize: 11, color: AppColors.textSecondary)),
-                      if (p['price'] != null &&
-                          p['price'].toString().isNotEmpty) ...[
-                        const SizedBox(height: 2),
-                        Text(p['price'].toString(),
-                            style: const TextStyle(
-                                fontSize: 11,
-                                color: Color(0xFF8B5CF6),
-                                fontWeight: FontWeight.w600)),
-                      ],
-                    ])),
-                if (selected)
-                  const Icon(Icons.check_circle_rounded,
-                      color: Color(0xFF8B5CF6), size: 22),
-              ]),
-            ),
-          );
-        }),
-        if (_selectedProduct != null) ...[
-          const SizedBox(height: 8),
-          TextField(
-            controller: _notesForProductCtrl,
-            maxLines: 2,
-            decoration: InputDecoration(
-              hintText: 'Quantity, specifications, or any notes... (optional)',
-              filled: true,
-              fillColor: AppColors.background,
-              border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: AppColors.border)),
-              enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: AppColors.border)),
-              contentPadding: const EdgeInsets.all(12),
-            ),
-          ),
-        ],
-      ],
-    );
+class _ProjectDetailsSheet extends StatelessWidget {
+  final ClientProjectModel project;
+
+  const _ProjectDetailsSheet({required this.project});
+
+  Color get _statusColor {
+    return Color(int.parse('0xFF${project.statusColorHex}'));
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // CUSTOM TAB (unchanged)
-  // ══════════════════════════════════════════════════════════════
-  Widget _buildCustomTab() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Service Category',
-              style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary)),
-          const SizedBox(height: 6),
-          Container(
-            decoration: BoxDecoration(
-              color: AppColors.background,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: _selectedCategory != null
-                    ? AppColors.primary
-                    : AppColors.border,
-                width: _selectedCategory != null ? 1.5 : 1,
+  Future<void> _openInvoice(BuildContext context) async {
+    final url = project.invoiceUrl;
+
+    if (url == null || url.trim().isEmpty) return;
+
+    final uri = Uri.tryParse(url);
+
+    if (uri == null) return;
+
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+
+    if (!launched && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Could not open invoice'),
+          backgroundColor: AppColors.error,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          margin: const EdgeInsets.all(16),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomSafe = MediaQuery.of(context).viewPadding.bottom;
+    final color = _statusColor;
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(20, 14, 20, bottomSafe + 28),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 42,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: AppColors.border,
+                    borderRadius: BorderRadius.circular(100),
+                  ),
+                ),
               ),
-            ),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<String>(
-                value: _selectedCategory,
-                isExpanded: true,
-                hint: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 14),
-                  child: Text('Select a category...',
-                      style: TextStyle(
-                          color: AppColors.textHint, fontSize: 13)),
-                ),
-                icon: const Padding(
-                  padding: EdgeInsets.only(right: 12),
-                  child: Icon(Icons.keyboard_arrow_down_rounded,
-                      color: AppColors.textSecondary),
-                ),
-                borderRadius: BorderRadius.circular(14),
-                items: List.generate(_categories.length, (i) {
-                  final cat   = _categories[i];
-                  final color = Color(int.parse('0xFF${_categoryColorHex[i]}'));
-                  final icon  = _categoryIcons[i];
-                  return DropdownMenuItem<String>(
-                    value: cat,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 6),
-                      child: Row(children: [
-                        Container(
-                          width: 36, height: 36,
-                          decoration: BoxDecoration(
-                              color: color.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(10)),
-                          child: Icon(icon, color: color, size: 18),
-                        ),
-                        const SizedBox(width: 12),
-                        Text(cat,
-                            style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.textPrimary)),
-                      ]),
+              const SizedBox(height: 22),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      project.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppColors.textPrimary,
+                        fontSize: 22,
+                        height: 1.15,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  );
-                }),
-                onChanged: (val) => setState(() => _selectedCategory = val),
-                selectedItemBuilder: (_) =>
-                    List.generate(_categories.length, (i) {
-                  final cat   = _categories[i];
-                  final color = Color(int.parse('0xFF${_categoryColorHex[i]}'));
-                  final icon  = _categoryIcons[i];
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 14),
-                    child: Row(children: [
-                      Container(
-                          width: 28, height: 28,
-                          decoration: BoxDecoration(
-                              color: color.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(8)),
-                          child: Icon(icon, color: color, size: 15)),
-                      const SizedBox(width: 8),
-                      Text(cat,
-                          style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: color)),
-                    ]),
-                  );
-                }),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(
+                      Icons.close_rounded,
+                      color: AppColors.textHint,
+                      size: 28,
+                    ),
+                  ),
+                ],
               ),
+              const SizedBox(height: 12),
+              _StatusBadge(label: project.statusLabel, color: color),
+              const SizedBox(height: 22),
+              _DetailProgress(progress: project.progress, color: color),
+              const SizedBox(height: 22),
+              if (project.description != null &&
+                  project.description!.trim().isNotEmpty)
+                _InfoBlock(
+                  title: 'Description',
+                  body: project.description!,
+                  icon: Icons.notes_rounded,
+                ),
+              if (project.customNotes != null &&
+                  project.customNotes!.trim().isNotEmpty)
+                _InfoBlock(
+                  title: 'Request Notes',
+                  body: project.customNotes!,
+                  icon: Icons.edit_note_rounded,
+                ),
+              if (project.adminNotes != null &&
+                  project.adminNotes!.trim().isNotEmpty)
+                _InfoBlock(
+                  title: 'Team Update',
+                  body: project.adminNotes!,
+                  icon: Icons.support_agent_rounded,
+                  color: AppColors.primary,
+                ),
+              const SizedBox(height: 4),
+              _MetaRow(
+                icon: Icons.calendar_today_rounded,
+                label: 'Submitted',
+                value:
+                    '${project.createdAt.day}/${project.createdAt.month}/${project.createdAt.year}',
+              ),
+              const SizedBox(height: 10),
+              _MetaRow(
+                icon: Icons.update_rounded,
+                label: 'Last Updated',
+                value:
+                    '${project.updatedAt.day}/${project.updatedAt.month}/${project.updatedAt.year}',
+              ),
+              if (project.invoiceUrl != null &&
+                  project.invoiceUrl!.trim().isNotEmpty) ...[
+                const SizedBox(height: 22),
+                GestureDetector(
+                  onTap: () => _openInvoice(context),
+                  child: Container(
+                    height: 54,
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      gradient: AppColors.primaryGradient,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Center(
+                      child: Text(
+                        project.invoiceLabel?.isNotEmpty == true
+                            ? project.invoiceLabel!
+                            : 'Open Invoice',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DetailProgress extends StatelessWidget {
+  final int progress;
+  final Color color;
+
+  const _DetailProgress({required this.progress, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final value = progress.clamp(0, 100) / 100;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Text(
+                'Progress',
+                style: TextStyle(
+                  color: color,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '$progress%',
+                style: TextStyle(
+                  color: color,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(100),
+            child: LinearProgressIndicator(
+              value: value,
+              minHeight: 9,
+              color: color,
+              backgroundColor: Colors.white,
             ),
           ),
-          const SizedBox(height: 14),
-          _field('Project Title *', _titleCtrl,
-              'e.g. Office Network Setup', maxLines: 1),
-          const SizedBox(height: 12),
-          _field('Description', _descCtrl,
-              'Describe your project or requirements...', maxLines: 3),
-          const SizedBox(height: 12),
-          _field('Additional Notes', _notesCtrl,
-              'Timeline, budget, special requests...', maxLines: 2),
         ],
       ),
     );
   }
+}
 
-  Widget _field(String label, TextEditingController ctrl, String hint,
-      {int maxLines = 1}) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+class _InfoBlock extends StatelessWidget {
+  final String title;
+  final String body;
+  final IconData icon;
+  final Color? color;
+
+  const _InfoBlock({
+    required this.title,
+    required this.body,
+    required this.icon,
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final blockColor = color ?? AppColors.textSecondary;
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: AppColors.background,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: blockColor, size: 20),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: blockColor,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  body,
+                  style: const TextStyle(
+                    color: AppColors.textPrimary,
+                    fontSize: 13,
+                    height: 1.45,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MetaRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+
+  const _MetaRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
       children: [
-        Text(label,
-            style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: AppColors.textPrimary)),
-        const SizedBox(height: 6),
-        TextField(
-          controller: ctrl,
-          maxLines: maxLines,
-          decoration: InputDecoration(
-            hintText: hint,
-            filled: true,
-            fillColor: AppColors.background,
-            border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppColors.border)),
-            enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppColors.border)),
-            focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide:
-                    const BorderSide(color: AppColors.primary, width: 1.5)),
-            contentPadding: const EdgeInsets.all(14),
+        Icon(icon, color: AppColors.textHint, size: 18),
+        const SizedBox(width: 9),
+        Text(
+          label,
+          style: const TextStyle(
+            color: AppColors.textSecondary,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const Spacer(),
+        Text(
+          value,
+          style: const TextStyle(
+            color: AppColors.textPrimary,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
           ),
         ),
       ],
     );
   }
+}
+
+class _StatusFilter {
+  final String label;
+  final String value;
+
+  const _StatusFilter({required this.label, required this.value});
+}
+
+class _RequestCategory {
+  final String title;
+  final String value;
+  final IconData icon;
+  final Color color;
+
+  const _RequestCategory({
+    required this.title,
+    required this.value,
+    required this.icon,
+    required this.color,
+  });
 }

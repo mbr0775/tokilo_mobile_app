@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/services/google_auth_service.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_strings.dart';
 import '../widgets/auth_text_field.dart';
 import '../widgets/gradient_button.dart';
 import '../widgets/auth_header.dart';
+import '../widgets/google_sign_in_button.dart';
 
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
@@ -27,6 +30,19 @@ class _SignupScreenState extends State<SignupScreen> {
   bool _obscureConfirm = true;
   bool _acceptTerms = false;
 
+  Future<void> _openLegal(String path) async {
+    try {
+      final opened = await launchUrl(
+        Uri.https('www.tokilotech.com', path),
+        mode: LaunchMode.externalApplication,
+      );
+      if (!opened && mounted)
+        _showError('Could not open the policy. Please try again.');
+    } catch (_) {
+      if (mounted) _showError('Could not open the policy. Please try again.');
+    }
+  }
+
   @override
   void dispose() {
     _nameController.dispose();
@@ -39,6 +55,7 @@ class _SignupScreenState extends State<SignupScreen> {
   }
 
   Future<void> _signup() async {
+    if (_isLoading) return;
     if (!_formKey.currentState!.validate()) return;
     if (!_acceptTerms) {
       _showError('Please accept the Terms & Conditions to continue.');
@@ -51,6 +68,7 @@ class _SignupScreenState extends State<SignupScreen> {
       await Supabase.instance.client.auth.signUp(
         email: _emailController.text.trim(),
         password: _passwordController.text,
+        emailRedirectTo: GoogleAuthService.redirectUrl,
         data: {
           'full_name': _nameController.text.trim(),
           'company_name': _companyController.text.trim(),
@@ -122,8 +140,11 @@ class _SignupScreenState extends State<SignupScreen> {
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(color: AppColors.border),
                         ),
-                        child: const Icon(Icons.arrow_back_ios_new_rounded,
-                            size: 18, color: AppColors.textPrimary),
+                        child: const Icon(
+                          Icons.arrow_back_ios_new_rounded,
+                          size: 18,
+                          color: AppColors.textPrimary,
+                        ),
                       ),
                     ),
                   ],
@@ -138,6 +159,63 @@ class _SignupScreenState extends State<SignupScreen> {
 
                 const SizedBox(height: 32),
 
+                // Consent applies to Google and email signup.
+                // Terms checkbox
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: Checkbox(
+                        value: _acceptTerms,
+                        activeColor: AppColors.primary,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        onChanged: (val) =>
+                            setState(() => _acceptTerms = val ?? false),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Wrap(
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          const Text(
+                            'I agree to the ',
+                            style: TextStyle(fontSize: 13),
+                          ),
+                          TextButton(
+                            onPressed: () =>
+                                _openLegal('/terms-and-conditions'),
+                            child: const Text('Terms & Conditions'),
+                          ),
+                          const Text(' and ', style: TextStyle(fontSize: 13)),
+                          TextButton(
+                            onPressed: () => _openLegal('/privacy-policy'),
+                            child: const Text('Privacy Policy'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 20),
+
+                GoogleSignInButton(
+                  enabled: !_isLoading,
+                  canContinue: () {
+                    if (_acceptTerms) return true;
+                    _showError(
+                      'Please accept the Terms & Conditions to continue.',
+                    );
+                    return false;
+                  },
+                  onBusyChanged: (busy) => setState(() => _isLoading = busy),
+                ),
+                const AuthMethodDivider(label: 'or sign up with email'),
                 // Full Name
                 AuthTextField(
                   controller: _nameController,
@@ -145,7 +223,8 @@ class _SignupScreenState extends State<SignupScreen> {
                   hint: 'Enter your full name',
                   prefixIcon: Icons.person_outline_rounded,
                   validator: (val) {
-                    if (val == null || val.isEmpty) return AppStrings.nameRequired;
+                    if (val == null || val.isEmpty)
+                      return AppStrings.nameRequired;
                     return null;
                   },
                 ),
@@ -170,8 +249,9 @@ class _SignupScreenState extends State<SignupScreen> {
                   keyboardType: TextInputType.emailAddress,
                   prefixIcon: Icons.email_outlined,
                   validator: (val) {
-                    if (val == null || val.isEmpty) return AppStrings.emailRequired;
-                    if (!RegExp(r'^[\w-.]+@([\w-]+\.)+[\w]{2,4}$').hasMatch(val)) {
+                    if (val == null || val.isEmpty)
+                      return AppStrings.emailRequired;
+                    if (!RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(val)) {
                       return AppStrings.invalidEmail;
                     }
                     return null;
@@ -200,13 +280,17 @@ class _SignupScreenState extends State<SignupScreen> {
                   prefixIcon: Icons.lock_outline_rounded,
                   suffixIcon: IconButton(
                     icon: Icon(
-                      _obscurePassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                      _obscurePassword
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
                       color: AppColors.textHint,
                     ),
-                    onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                    onPressed: () =>
+                        setState(() => _obscurePassword = !_obscurePassword),
                   ),
                   validator: (val) {
-                    if (val == null || val.isEmpty) return AppStrings.passwordRequired;
+                    if (val == null || val.isEmpty)
+                      return AppStrings.passwordRequired;
                     if (val.length < 6) return AppStrings.passwordTooShort;
                     return null;
                   },
@@ -223,62 +307,24 @@ class _SignupScreenState extends State<SignupScreen> {
                   prefixIcon: Icons.lock_outline_rounded,
                   suffixIcon: IconButton(
                     icon: Icon(
-                      _obscureConfirm ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                      _obscureConfirm
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
                       color: AppColors.textHint,
                     ),
-                    onPressed: () => setState(() => _obscureConfirm = !_obscureConfirm),
+                    onPressed: () =>
+                        setState(() => _obscureConfirm = !_obscureConfirm),
                   ),
                   validator: (val) {
-                    if (val == null || val.isEmpty) return 'Please confirm your password';
-                    if (val != _passwordController.text) return AppStrings.passwordsNotMatch;
+                    if (val == null || val.isEmpty)
+                      return 'Please confirm your password';
+                    if (val != _passwordController.text)
+                      return AppStrings.passwordsNotMatch;
                     return null;
                   },
                 ),
 
                 const SizedBox(height: 20),
-
-                // Terms checkbox
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SizedBox(
-                      width: 22,
-                      height: 22,
-                      child: Checkbox(
-                        value: _acceptTerms,
-                        activeColor: AppColors.primary,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                        onChanged: (val) => setState(() => _acceptTerms = val ?? false),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: RichText(
-                        text: const TextSpan(
-                          style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
-                          children: [
-                            TextSpan(text: 'I agree to the '),
-                            TextSpan(
-                              text: 'Terms & Conditions',
-                              style: TextStyle(
-                                color: AppColors.primary,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            TextSpan(text: ' and '),
-                            TextSpan(
-                              text: 'Privacy Policy',
-                              style: TextStyle(
-                                color: AppColors.primary,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
 
                 const SizedBox(height: 28),
 
@@ -295,7 +341,10 @@ class _SignupScreenState extends State<SignupScreen> {
                   children: [
                     const Text(
                       AppStrings.alreadyHaveAccount,
-                      style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
+                      style: TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 14,
+                      ),
                     ),
                     GestureDetector(
                       onTap: () => context.pop(),

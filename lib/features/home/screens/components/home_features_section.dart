@@ -1,6 +1,5 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../core/constants/app_colors.dart';
 
 class HomeFeaturesSection extends StatefulWidget {
@@ -11,7 +10,6 @@ class HomeFeaturesSection extends StatefulWidget {
 }
 
 class _HomeFeaturesSectionState extends State<HomeFeaturesSection> {
-  final _supabase = Supabase.instance.client;
   List<_FeatureItem> _items = [];
   bool _isLoading = true;
 

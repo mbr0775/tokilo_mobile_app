@@ -155,7 +155,7 @@ class _AdminPortfolioScreenState extends State<AdminPortfolioScreen> {
           actions: [
             IconButton(
               onPressed: _loadProjects,
-              icon: const Icon(Icons.refresh_rounded, color: Colors.white),
+              icon: const Icon(Icons.refresh_rounded, color: AppColors.textPrimary),
             ),
           ],
         ),

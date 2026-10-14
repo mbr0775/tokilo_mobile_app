@@ -143,7 +143,7 @@ class _AdminServicesScreenState extends State<AdminServicesScreen> {
           actions: [
             IconButton(
               onPressed: _loadServices,
-              icon: const Icon(Icons.refresh_rounded, color: Colors.white),
+              icon: const Icon(Icons.refresh_rounded, color: AppColors.textPrimary),
               tooltip: 'Refresh',
             ),
           ],

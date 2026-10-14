@@ -1,26 +1,25 @@
 // lib/admin/widgets/multi_image_picker.dart
 //
-// Reusable widget for picking + uploading multiple images.
-// Used in:
-//   • PortfolioFormSheet  (lib/admin/screens/admin_portfolio_screen.dart)
-//   • ShowcaseFormSheet   (lib/admin/screens/admin_showcase_screen.dart)
-//
-// Stores uploaded URLs in a List<String>.
-// Caller provides [existingUrls] on edit, and a callback [onChanged]
-// whenever the list changes.
+// Fixed:
+// - No permanent loading placeholder.
+// - Upload first, then add image URL.
+// - Shows uploading state on the Add button.
+// - Handles upload errors clearly.
+// - Prevents right-side overflow.
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
 import '../../core/constants/app_colors.dart';
 import '../constants/admin_constants.dart';
 
 class MultiImagePicker extends StatefulWidget {
-  final List<String>             existingUrls;
+  final List<String> existingUrls;
   final ValueChanged<List<String>> onChanged;
-  final String                   folder;       // e.g. 'portfolio' or 'showcase'
-  final String?                  label;
+  final String folder;
+  final String? label;
 
   const MultiImagePicker({
     super.key,
@@ -35,304 +34,540 @@ class MultiImagePicker extends StatefulWidget {
 }
 
 class _MultiImagePickerState extends State<MultiImagePicker> {
-  final _supabase = Supabase.instance.client;
-  final _picker   = ImagePicker();
+  final SupabaseClient _supabase = Supabase.instance.client;
+  final ImagePicker _picker = ImagePicker();
 
   late List<String> _urls;
-  final List<bool>  _uploading = [];
-  bool _pickingMultiple = false;
+  bool _isUploading = false;
 
   @override
   void initState() {
     super.initState();
     _urls = List<String>.from(widget.existingUrls);
-    _uploading.addAll(List.filled(_urls.length, false));
   }
 
-  Future<void> _pickAndUpload() async {
-    setState(() => _pickingMultiple = true);
-    try {
-      final picked = await _picker.pickMultiImage(
-          imageQuality: 80, maxWidth: 1400);
-      if (picked.isEmpty) return;
+  @override
+  void didUpdateWidget(covariant MultiImagePicker oldWidget) {
+    super.didUpdateWidget(oldWidget);
 
-      for (final xFile in picked) {
-        final bytes = await xFile.readAsBytes();
-        final ext   = xFile.name.split('.').last.toLowerCase();
-        final idx   = _urls.length;
-
-        setState(() {
-          _urls.add('');           // placeholder
-          _uploading.add(true);
-        });
-
-        try {
-          final fileName =
-              '${widget.folder}/${DateTime.now().millisecondsSinceEpoch}_$idx.$ext';
-          await _supabase.storage
-              .from(AdminConstants.storageBucket)
-              .uploadBinary(
-                fileName,
-                bytes,
-                fileOptions: FileOptions(
-                    contentType: 'image/$ext',
-                    cacheControl: '3600',
-                    upsert: false),
-              );
-          final url = _supabase.storage
-              .from(AdminConstants.storageBucket)
-              .getPublicUrl(fileName);
-
-          if (mounted) {
-            setState(() {
-              _urls[idx]      = url;
-              _uploading[idx] = false;
-            });
-            widget.onChanged(List<String>.from(_urls));
-          }
-        } catch (e) {
-          if (mounted) {
-            setState(() {
-              _urls.removeAt(idx);
-              _uploading.removeAt(idx);
-            });
-            _snack('Upload failed: $e');
-          }
-        }
-      }
-    } finally {
-      if (mounted) setState(() => _pickingMultiple = false);
+    if (!listEquals(oldWidget.existingUrls, widget.existingUrls)) {
+      _urls = List<String>.from(widget.existingUrls);
     }
   }
 
-  void _remove(int i) {
+  String _contentType(String ext) {
+    final cleanExt = ext.toLowerCase();
+
+    if (cleanExt == 'jpg' || cleanExt == 'jpeg') return 'image/jpeg';
+    if (cleanExt == 'png') return 'image/png';
+    if (cleanExt == 'webp') return 'image/webp';
+    if (cleanExt == 'gif') return 'image/gif';
+
+    return 'image/jpeg';
+  }
+
+  String _safeExtension(String name) {
+    if (!name.contains('.')) return 'jpg';
+
+    final ext = name.split('.').last.toLowerCase();
+
+    if (ext == 'jpg' ||
+        ext == 'jpeg' ||
+        ext == 'png' ||
+        ext == 'webp' ||
+        ext == 'gif') {
+      return ext;
+    }
+
+    return 'jpg';
+  }
+
+  Future<void> _pickAndUpload() async {
+    if (_isUploading) return;
+
+    try {
+      final pickedImages = await _picker.pickMultiImage(
+        imageQuality: 75,
+        maxWidth: 1200,
+      );
+
+      if (pickedImages.isEmpty) return;
+
+      setState(() => _isUploading = true);
+
+      final List<String> uploadedUrls = [];
+
+      for (int i = 0; i < pickedImages.length; i++) {
+        final xFile = pickedImages[i];
+        final bytes = await xFile.readAsBytes();
+
+        final ext = _safeExtension(xFile.name);
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        final fileName = '${widget.folder}/${timestamp}_$i.$ext';
+
+        await _supabase.storage.from(AdminConstants.storageBucket).uploadBinary(
+          fileName,
+          bytes,
+          fileOptions: FileOptions(
+            contentType: _contentType(ext),
+            cacheControl: '3600',
+            upsert: true,
+          ),
+        );
+
+        final publicUrl = _supabase.storage
+            .from(AdminConstants.storageBucket)
+            .getPublicUrl(fileName);
+
+        uploadedUrls.add(publicUrl);
+      }
+
+      if (!mounted) return;
+
+      setState(() {
+        _urls.addAll(uploadedUrls);
+      });
+
+      widget.onChanged(List<String>.from(_urls));
+
+      _snack(
+        uploadedUrls.length == 1
+            ? 'Image uploaded successfully'
+            : '${uploadedUrls.length} images uploaded successfully',
+        error: false,
+      );
+    } catch (e) {
+      _snack('Image upload failed: $e', error: true);
+    } finally {
+      if (mounted) {
+        setState(() => _isUploading = false);
+      }
+    }
+  }
+
+  void _remove(int index) {
+    if (index < 0 || index >= _urls.length) return;
+
     setState(() {
-      _urls.removeAt(i);
-      _uploading.removeAt(i);
+      _urls.removeAt(index);
     });
+
     widget.onChanged(List<String>.from(_urls));
   }
 
-  void _snack(String msg) {
+  void _snack(String message, {required bool error}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      backgroundColor: AppColors.error,
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      margin: const EdgeInsets.all(16),
-    ));
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: error ? AppColors.error : AppColors.success,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        margin: const EdgeInsets.all(16),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final label = widget.label ?? 'Project Images';
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // ── Label row ────────────────────────────────────────────────
-        Row(
-          children: [
-            Text(
-              widget.label ?? 'Project Images',
-              style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary),
-            ),
-            const Spacer(),
-            GestureDetector(
-              onTap: _pickingMultiple ? null : _pickAndUpload,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                      color: AppColors.primary.withOpacity(0.3)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _pickingMultiple
-                        ? SizedBox(
-                            width: 12,
-                            height: 12,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: AppColors.primary))
-                        : const Icon(Icons.add_photo_alternate_rounded,
-                            size: 14, color: AppColors.primary),
-                    const SizedBox(width: 6),
-                    const Text('Add Images',
-                        style: TextStyle(
-                            fontSize: 12,
-                            color: AppColors.primary,
-                            fontWeight: FontWeight.w600)),
-                  ],
-                ),
-              ),
-            ),
-          ],
+        _HeaderRow(
+          label: label,
+          isUploading: _isUploading,
+          onAdd: _pickAndUpload,
         ),
-        const SizedBox(height: 4),
-        Text(
+        const SizedBox(height: 8),
+        const Text(
           'Tap and hold an image to remove it. Tap + to add more.',
           style: TextStyle(
-              fontSize: 11, color: AppColors.textSecondary),
+            fontSize: 11.5,
+            color: AppColors.textSecondary,
+            height: 1.35,
+          ),
         ),
-        const SizedBox(height: 10),
-
-        // ── Image grid ───────────────────────────────────────────────
+        const SizedBox(height: 12),
         if (_urls.isEmpty)
-          GestureDetector(
+          _EmptyImageBox(
+            isUploading: _isUploading,
             onTap: _pickAndUpload,
-            child: Container(
-              height: 100,
-              width: double.infinity,
-              decoration: BoxDecoration(
-                color: AppColors.background,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                    color: AppColors.primary.withOpacity(0.25),
-                    width: 1.5),
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.add_photo_alternate_rounded,
-                      color: AppColors.primary.withOpacity(0.5), size: 28),
-                  const SizedBox(height: 6),
-                  const Text('Tap to add images',
-                      style: TextStyle(
-                          fontSize: 12,
-                          color: AppColors.textHint)),
-                ],
-              ),
-            ),
           )
         else
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            gridDelegate:
-                const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 3,
-              crossAxisSpacing: 8,
-              mainAxisSpacing: 8,
-              childAspectRatio: 1,
-            ),
-            itemCount: _urls.length + 1, // +1 for the add button
-            itemBuilder: (_, i) {
-              // Last cell = add more button
-              if (i == _urls.length) {
-                return GestureDetector(
-                  onTap: _pickAndUpload,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: AppColors.background,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                          color: AppColors.primary.withOpacity(0.3),
-                          width: 1.5),
-                    ),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.add_rounded,
-                            color: AppColors.primary, size: 24),
-                        const SizedBox(height: 4),
-                        Text('Add',
-                            style: TextStyle(
-                                fontSize: 10,
-                                color: AppColors.primary,
-                                fontWeight: FontWeight.w600)),
-                      ],
-                    ),
-                  ),
-                );
-              }
-
-              final url        = _urls[i];
-              final isUploading = _uploading[i];
-
-              return GestureDetector(
-                onLongPress: () => _remove(i),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      // Image
-                      isUploading || url.isEmpty
-                          ? Container(
-                              color: AppColors.border,
-                              child: const Center(
-                                child: SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: AppColors.primary),
-                                ),
-                              ),
-                            )
-                          : Image.network(
-                              url,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => Container(
-                                color: AppColors.border,
-                                child: const Icon(
-                                    Icons.broken_image_rounded,
-                                    color: AppColors.textHint),
-                              ),
-                            ),
-
-                      // Remove button (top-right)
-                      if (!isUploading && url.isNotEmpty)
-                        Positioned(
-                          top: 4, right: 4,
-                          child: GestureDetector(
-                            onTap: () => _remove(i),
-                            child: Container(
-                              width: 22, height: 22,
-                              decoration: const BoxDecoration(
-                                color: Colors.black54,
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(Icons.close_rounded,
-                                  color: Colors.white, size: 14),
-                            ),
-                          ),
-                        ),
-
-                      // Index badge
-                      if (!isUploading && url.isNotEmpty)
-                        Positioned(
-                          bottom: 4, left: 4,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 5, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: Colors.black54,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              '${i + 1}',
-                              style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w700),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              );
-            },
+          _ImageGrid(
+            urls: _urls,
+            isUploading: _isUploading,
+            onAdd: _pickAndUpload,
+            onRemove: _remove,
           ),
       ],
+    );
+  }
+}
+
+class _HeaderRow extends StatelessWidget {
+  final String label;
+  final bool isUploading;
+  final VoidCallback onAdd;
+
+  const _HeaderRow({
+    required this.label,
+    required this.isUploading,
+    required this.onAdd,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 370;
+
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.textPrimary,
+                  height: 1.25,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            _AddButton(
+              label: compact ? 'Add' : 'Add Images',
+              isUploading: isUploading,
+              onTap: isUploading ? null : onAdd,
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _AddButton extends StatelessWidget {
+  final String label;
+  final bool isUploading;
+  final VoidCallback? onTap;
+
+  const _AddButton({
+    required this.label,
+    required this.isUploading,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          height: 38,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: AppColors.primary.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: AppColors.primary.withValues(alpha: 0.30),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (isUploading)
+                const SizedBox(
+                  width: 15,
+                  height: 15,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: AppColors.primary,
+                  ),
+                )
+              else
+                const Icon(
+                  Icons.add_photo_alternate_rounded,
+                  size: 17,
+                  color: AppColors.primary,
+                ),
+              const SizedBox(width: 7),
+              Text(
+                isUploading ? 'Uploading' : label,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppColors.primary,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyImageBox extends StatelessWidget {
+  final bool isUploading;
+  final VoidCallback onTap;
+
+  const _EmptyImageBox({
+    required this.isUploading,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: isUploading ? null : onTap,
+      child: Container(
+        height: 112,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: AppColors.background,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: AppColors.primary.withValues(alpha: 0.25),
+            width: 1.5,
+          ),
+        ),
+        child: Center(
+          child: isUploading
+              ? const Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 26,
+                height: 26,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.5,
+                  color: AppColors.primary,
+                ),
+              ),
+              SizedBox(height: 10),
+              Text(
+                'Uploading images...',
+                style: TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          )
+              : const Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.add_photo_alternate_rounded,
+                color: AppColors.primary,
+                size: 30,
+              ),
+              SizedBox(height: 7),
+              Text(
+                'Tap to add images',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textHint,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ImageGrid extends StatelessWidget {
+  final List<String> urls;
+  final bool isUploading;
+  final VoidCallback onAdd;
+  final ValueChanged<int> onRemove;
+
+  const _ImageGrid({
+    required this.urls,
+    required this.isUploading,
+    required this.onAdd,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final crossAxisCount = constraints.maxWidth < 330 ? 2 : 3;
+
+        return GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: urls.length + 1,
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: crossAxisCount,
+            crossAxisSpacing: 10,
+            mainAxisSpacing: 10,
+            childAspectRatio: 1,
+          ),
+          itemBuilder: (context, index) {
+            if (index == urls.length) {
+              return _AddGridCell(
+                isUploading: isUploading,
+                onTap: isUploading ? null : onAdd,
+              );
+            }
+
+            return _ImageCell(
+              url: urls[index],
+              onRemove: () => onRemove(index),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _AddGridCell extends StatelessWidget {
+  final bool isUploading;
+  final VoidCallback? onTap;
+
+  const _AddGridCell({
+    required this.isUploading,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.background,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: AppColors.primary.withValues(alpha: 0.30),
+            width: 1.5,
+          ),
+        ),
+        child: Center(
+          child: isUploading
+              ? const SizedBox(
+            width: 24,
+            height: 24,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: AppColors.primary,
+            ),
+          )
+              : const Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.add_rounded,
+                color: AppColors.primary,
+                size: 30,
+              ),
+              SizedBox(height: 5),
+              Text(
+                'Add',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: AppColors.primary,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ImageCell extends StatelessWidget {
+  final String url;
+  final VoidCallback onRemove;
+
+  const _ImageCell({
+    required this.url,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onLongPress: onRemove,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Image.network(
+                url,
+                fit: BoxFit.cover,
+                loadingBuilder: (context, child, progress) {
+                  if (progress == null) return child;
+
+                  return Container(
+                    color: AppColors.background,
+                    child: const Center(
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: AppColors.primary,
+                      ),
+                    ),
+                  );
+                },
+                errorBuilder: (_, __, ___) {
+                  return Container(
+                    color: AppColors.background,
+                    child: const Center(
+                      child: Icon(
+                        Icons.broken_image_rounded,
+                        color: AppColors.textHint,
+                        size: 30,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+          Positioned(
+            top: 7,
+            right: 7,
+            child: GestureDetector(
+              onTap: onRemove,
+              child: Container(
+                width: 27,
+                height: 27,
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.close_rounded,
+                  color: Colors.white,
+                  size: 17,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -5,6 +5,7 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_strings.dart';
 import '../widgets/auth_text_field.dart';
 import '../widgets/gradient_button.dart';
+import '../../../core/services/google_auth_service.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
   const ForgotPasswordScreen({super.key});
@@ -26,13 +27,17 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   }
 
   Future<void> _sendResetLink() async {
+    if (_isLoading) return;
     if (!_formKey.currentState!.validate()) return;
     setState(() => _isLoading = true);
 
     try {
-      await Supabase.instance.client.auth.resetPasswordForEmail(
-        _emailController.text.trim(),
-      );
+      await Supabase.instance.client.auth
+          .resetPasswordForEmail(
+            _emailController.text.trim(),
+            redirectTo: GoogleAuthService.redirectUrl,
+          )
+          .timeout(const Duration(seconds: 20));
       if (mounted) setState(() => _emailSent = true);
     } on AuthException catch (e) {
       if (mounted) _showError(e.message);
@@ -80,8 +85,11 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(color: AppColors.border),
                       ),
-                      child: const Icon(Icons.arrow_back_ios_new_rounded,
-                          size: 18, color: AppColors.textPrimary),
+                      child: const Icon(
+                        Icons.arrow_back_ios_new_rounded,
+                        size: 18,
+                        color: AppColors.textPrimary,
+                      ),
                     ),
                   ),
                 ],
@@ -130,7 +138,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
               Text(
                 _emailSent
-                    ? 'We\'ve sent a password reset link to your email address. Please check your inbox.'
+                    ? 'If an account uses this address, you’ll receive a reset link. Check your inbox and spam folder.'
                     : 'Enter the email address linked to your account and we\'ll send you a reset link.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
@@ -152,8 +160,11 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                     keyboardType: TextInputType.emailAddress,
                     prefixIcon: Icons.email_outlined,
                     validator: (val) {
-                      if (val == null || val.isEmpty) return AppStrings.emailRequired;
-                      if (!RegExp(r'^[\w-.]+@([\w-]+\.)+[\w]{2,4}$').hasMatch(val)) {
+                      if (val == null || val.isEmpty)
+                        return AppStrings.emailRequired;
+                      if (!RegExp(
+                        r'^[^\s@]+@[^\s@]+\.[^\s@]+$',
+                      ).hasMatch(val)) {
                         return AppStrings.invalidEmail;
                       }
                       return null;
@@ -176,7 +187,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                   decoration: BoxDecoration(
                     color: AppColors.success.withOpacity(0.08),
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: AppColors.success.withOpacity(0.3)),
+                    border: Border.all(
+                      color: AppColors.success.withOpacity(0.3),
+                    ),
                   ),
                   child: Row(
                     children: [
@@ -187,8 +200,11 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                           color: AppColors.success.withOpacity(0.15),
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: const Icon(Icons.check_circle_rounded,
-                            color: AppColors.success, size: 28),
+                        child: const Icon(
+                          Icons.check_circle_rounded,
+                          color: AppColors.success,
+                          size: 28,
+                        ),
                       ),
                       const SizedBox(width: 14),
                       const Expanded(
@@ -196,7 +212,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Email Sent!',
+                              'Request received',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 color: AppColors.success,
@@ -205,7 +221,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                             ),
                             SizedBox(height: 2),
                             Text(
-                              'Check your inbox for the reset link',
+                              'Check your inbox and spam folder',
                               style: TextStyle(
                                 color: AppColors.textSecondary,
                                 fontSize: 12,
@@ -238,8 +254,11 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: const [
-                      Icon(Icons.arrow_back_rounded,
-                          size: 16, color: AppColors.primary),
+                      Icon(
+                        Icons.arrow_back_rounded,
+                        size: 16,
+                        color: AppColors.primary,
+                      ),
                       SizedBox(width: 6),
                       Text(
                         AppStrings.backToLogin,

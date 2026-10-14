@@ -14,8 +14,8 @@ import 'package:flutter/services.dart';
 
 class ImageGalleryViewer extends StatefulWidget {
   final List<String> images;
-  final int          initialIndex;
-  final String?      title;
+  final int initialIndex;
+  final String? title;
 
   const ImageGalleryViewer({
     super.key,
@@ -36,10 +36,16 @@ class ImageGalleryViewer extends StatefulWidget {
       PageRouteBuilder(
         opaque: false,
         barrierColor: Colors.black,
+        transitionDuration: MediaQuery.disableAnimationsOf(context)
+            ? Duration.zero
+            : const Duration(milliseconds: 200),
+        reverseTransitionDuration: MediaQuery.disableAnimationsOf(context)
+            ? Duration.zero
+            : const Duration(milliseconds: 200),
         pageBuilder: (_, __, ___) => ImageGalleryViewer(
-          images:       images,
+          images: images,
           initialIndex: initialIndex,
-          title:        title,
+          title: title,
         ),
         transitionsBuilder: (_, anim, __, child) =>
             FadeTransition(opacity: anim, child: child),
@@ -58,7 +64,7 @@ class _ImageGalleryViewerState extends State<ImageGalleryViewer> {
   @override
   void initState() {
     super.initState();
-    _current  = widget.initialIndex;
+    _current = widget.initialIndex;
     _pageCtrl = PageController(initialPage: widget.initialIndex);
     // Go full immersive
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
@@ -80,19 +86,20 @@ class _ImageGalleryViewerState extends State<ImageGalleryViewer> {
         children: [
           // ── Swipeable pages ────────────────────────────────────────
           PageView.builder(
-            controller:   _pageCtrl,
-            itemCount:    widget.images.length,
+            controller: _pageCtrl,
+            itemCount: widget.images.length,
             onPageChanged: (i) => setState(() => _current = i),
             itemBuilder: (_, i) => _ZoomableImage(url: widget.images[i]),
           ),
 
           // ── Top bar ────────────────────────────────────────────────
           Positioned(
-            top: 0, left: 0, right: 0,
+            top: 0,
+            left: 0,
+            right: 0,
             child: SafeArea(
               child: Padding(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 child: Row(
                   children: [
                     // Close
@@ -137,15 +144,19 @@ class _ImageGalleryViewerState extends State<ImageGalleryViewer> {
           // ── Dot indicators ─────────────────────────────────────────
           if (widget.images.length > 1)
             Positioned(
-              bottom: 32, left: 0, right: 0,
+              bottom: 32,
+              left: 0,
+              right: 0,
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: List.generate(widget.images.length, (i) {
                   final active = _current == i;
                   return AnimatedContainer(
-                    duration: const Duration(milliseconds: 250),
+                    duration: MediaQuery.disableAnimationsOf(context)
+                        ? Duration.zero
+                        : const Duration(milliseconds: 250),
                     margin: const EdgeInsets.symmetric(horizontal: 3),
-                    width:  active ? 20 : 6,
+                    width: active ? 20 : 6,
                     height: 6,
                     decoration: BoxDecoration(
                       color: active
@@ -163,15 +174,19 @@ class _ImageGalleryViewerState extends State<ImageGalleryViewer> {
             // Left
             Positioned(
               left: 8,
-              top: 0, bottom: 0,
+              top: 0,
+              bottom: 0,
               child: Center(
                 child: _current > 0
                     ? _GlassBtn(
                         icon: Icons.chevron_left_rounded,
                         size: 28,
                         onTap: () => _pageCtrl.previousPage(
-                            duration: const Duration(milliseconds: 300),
-                            curve: Curves.easeInOut),
+                          duration: MediaQuery.disableAnimationsOf(context)
+                              ? Duration.zero
+                              : const Duration(milliseconds: 300),
+                          curve: Curves.easeInOut,
+                        ),
                       )
                     : const SizedBox.shrink(),
               ),
@@ -179,15 +194,19 @@ class _ImageGalleryViewerState extends State<ImageGalleryViewer> {
             // Right
             Positioned(
               right: 8,
-              top: 0, bottom: 0,
+              top: 0,
+              bottom: 0,
               child: Center(
                 child: _current < widget.images.length - 1
                     ? _GlassBtn(
                         icon: Icons.chevron_right_rounded,
                         size: 28,
                         onTap: () => _pageCtrl.nextPage(
-                            duration: const Duration(milliseconds: 300),
-                            curve: Curves.easeInOut),
+                          duration: MediaQuery.disableAnimationsOf(context)
+                              ? Duration.zero
+                              : const Duration(milliseconds: 300),
+                          curve: Curves.easeInOut,
+                        ),
                       )
                     : const SizedBox.shrink(),
               ),
@@ -213,7 +232,7 @@ class _ZoomableImage extends StatelessWidget {
         child: Image.network(
           url,
           fit: BoxFit.contain,
-          width:  double.infinity,
+          width: double.infinity,
           height: double.infinity,
           loadingBuilder: (_, child, progress) {
             if (progress == null) return child;
@@ -221,7 +240,7 @@ class _ZoomableImage extends StatelessWidget {
               child: CircularProgressIndicator(
                 value: progress.expectedTotalBytes != null
                     ? progress.cumulativeBytesLoaded /
-                        progress.expectedTotalBytes!
+                          progress.expectedTotalBytes!
                     : null,
                 color: Colors.white,
                 strokeWidth: 2,
@@ -231,12 +250,12 @@ class _ZoomableImage extends StatelessWidget {
           errorBuilder: (_, __, ___) => Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.broken_image_rounded,
-                  color: Colors.white24, size: 56),
+              Icon(Icons.broken_image_rounded, color: Colors.white24, size: 56),
               const SizedBox(height: 12),
-              Text('Failed to load image',
-                  style: TextStyle(
-                      color: Colors.white38, fontSize: 13)),
+              Text(
+                'Failed to load image',
+                style: TextStyle(color: Colors.white38, fontSize: 13),
+              ),
             ],
           ),
         ),
@@ -251,27 +270,25 @@ class _GlassBtn extends StatelessWidget {
   final VoidCallback onTap;
   final double size;
 
-  const _GlassBtn({
-    required this.icon,
-    required this.onTap,
-    this.size = 22,
-  });
+  const _GlassBtn({required this.icon, required this.onTap, this.size = 22});
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width:  44,
-        height: 44,
-        decoration: BoxDecoration(
-          color: Colors.black45,
-          shape: BoxShape.circle,
-          border: Border.all(
-              color: Colors.white.withOpacity(0.15)),
-        ),
-        child: Icon(icon, color: Colors.white, size: size),
+    final label = switch (icon) {
+      Icons.close_rounded => 'Close image gallery',
+      Icons.chevron_left_rounded => 'Previous image',
+      _ => 'Next image',
+    };
+    return IconButton(
+      tooltip: label,
+      onPressed: onTap,
+      style: IconButton.styleFrom(
+        backgroundColor: Colors.black45,
+        foregroundColor: Colors.white,
+        minimumSize: const Size(44, 44),
+        side: BorderSide(color: Colors.white.withValues(alpha: .15)),
       ),
+      icon: Icon(icon, size: size),
     );
   }
 }
