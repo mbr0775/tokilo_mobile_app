@@ -6,7 +6,7 @@ Prepared 14 October 2026. This document records verified work and remaining rele
 
 - Package: `com.tokilotechnologies.businesshub`; display name: Tokilo Business Hub.
 - Flutter 3.41.6 / Dart 3.11.4; Android target and compile SDK 36.
-- Play currently has AAB version 1.0.0, base version code 2, active and available to internal testers (14 October 2026, dashboard time 1:43 PM). The replacement candidate is 1.0.0+2. The owner confirmed email verification returns to Login and password reset returns to Login with the new password working on the installed version 2.
+- Play currently has AAB version 1.0.0, base version code 3, active and available to internal testers (14 October 2026, dashboard time 2:18 PM). The replacement candidate is 1.0.0+2. The owner confirmed email verification returns to Login and password reset returns to Login with the new password working on the installed version 2.
 - Device APK: `build/app/outputs/flutter-apk/app-arm64-v8a-release.apk`; version 2 split APK version code 2002 is Flutter's ABI offset.
 - Upload certificate: `docs/release/upload-certificate.pem`. The upload private key and passwords are outside Git, under the owner's private Codex directory. Back them up securely before uploading.
 - `android/key.properties` is local and ignored. Release builds fail when private signing configuration is missing, instead of silently using a debug certificate.
@@ -74,4 +74,4 @@ Version 2 AAB SHA-256: `6D7F3BE4A6BE256973C359C5A7050C4E92E63DF9FEF8CBF7EF45CD5A
 
 ## Version 3 privacy-control correction
 
-The owner clarified the requested control is privacy acceptance. Candidate 1.0.0+3 uses a circular checkbox, places Privacy Policy first in the consent label and legal links, and preserves the aligned 48-pixel touch target and explicit unchecked default. All 63 tests and code CI passed. The signed arm64 APK (2003) is installed on NIC-LX2; final native visual inspection awaits device unlock. Its AAB is built and passed 16 KB native alignment checks. Play internal testing currently remains on version 2; version 3 has not been uploaded.
+The owner clarified the requested control is privacy acceptance. Candidate 1.0.0+3 uses a circular checkbox, places Privacy Policy first in the consent label and legal links, and preserves the aligned 48-pixel touch target and explicit unchecked default. All 63 tests and code CI passed. The signed arm64 APK (2003) is installed on NIC-LX2; the native privacy acceptance circle and label alignment were visually verified after the owner unlocked the device. Its AAB is built and passed 16 KB native alignment checks. Version 3 was uploaded and validated, then published to the existing internal testers. Play shows Active and Available to internal testers, Not reviewed. AAB SHA-256: `A0A6EADDF73541AD9D15956515033DEB0F933B91C37D296DCC557B99CB81876E`.
